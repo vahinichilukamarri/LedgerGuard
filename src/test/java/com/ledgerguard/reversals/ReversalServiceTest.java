@@ -1,5 +1,6 @@
 package com.ledgerguard.reversals;
 
+import com.ledgerguard.outbox.OutboxRecorder;
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.postings.Posting;
 import com.ledgerguard.postings.PostingRepository;
@@ -44,8 +45,10 @@ class ReversalServiceTest {
     private final TransactionService transactions = mock(TransactionService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-02-01T09:00:00Z"), ZoneOffset.UTC);
 
-    private final ReversalService service =
-            new ReversalService(reversals, transactionRepository, postings, transactions, clock);
+    private final OutboxRecorder outbox = mock(OutboxRecorder.class);
+
+    private final ReversalService service = new ReversalService(
+            reversals, transactionRepository, postings, transactions, outbox, clock);
 
     private final UUID accountA = UUID.randomUUID();
     private final UUID accountB = UUID.randomUUID();

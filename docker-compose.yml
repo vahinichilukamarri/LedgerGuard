@@ -16,5 +16,55 @@ services:
       timeout: 5s
       retries: 10
 
+  # Kafka in KRaft mode: no Zookeeper.
+  #
+  # Zookeeper is removed entirely in Kafka 4.x, so starting a new project on it
+  # would mean building on something already deleted upstream. KRaft puts the
+  # controller in the broker process, which also means one container instead of
+  # two for a single-node development setup.
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: ledgerguard-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # Note the empty host, "PLAINTEXT://:9092", not "PLAINTEXT://0.0.0.0:9092".
+      # This image formats its storage on first boot, and that step rejects a
+      # literal 0.0.0.0 with "advertised.listeners cannot use the nonroutable
+      # meta-address". The empty form binds to all interfaces without tripping it.
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+
+      # The app runs on the host and reaches the broker through the mapped port,
+      # so the broker must advertise an address the host can actually dial.
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:9092"
+
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@localhost:9093"
+
+      # Single node, so nothing can be replicated anywhere else.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # Do not make a lone consumer wait out the default rebalance delay.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+      CLUSTER_ID: ledgerguard-local-cluster
+
+    # No named volume on purpose. Broker data lives in the container's own
+    # filesystem, which survives "docker compose stop/start" — all the failure
+    # demo needs — and is discarded by "docker compose down". A mounted volume
+    # would need its ownership fixing for the image's non-root user.
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
 volumes:
   ledgerguard-pgdata:

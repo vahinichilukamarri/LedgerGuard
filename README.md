@@ -2,16 +2,18 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 3 — Idempotency & Safe Retries.** Every write endpoint
-now requires an `Idempotency-Key`; retries replay instead of double-charging.
+**Current phase: Phase 4 — Transactional Outbox + Kafka.** Ledger events are
+written in the same transaction as the money, then published to Kafka after
+commit. A broker outage cannot lose an event or block a payment.
 
 | Phase | Tag | What it added |
 |---|---|---|
 | 1 — Ledger Core | `v0.1-ledger-core` | Double-entry accounts, payments, transactions and immutable postings, with balances derived from the postings ledger. |
 | 2 — Refunds, Reversals & Transaction Safety | `v0.2-transaction-safety` | Full and partial refunds, single-use reversals, and proven all-or-nothing writes. Both are new transactions, never edits. |
 | 3 — Idempotency & Safe Retries | `v0.3-idempotency` | Required idempotency keys, byte-identical replay, and exactly-one-effect under concurrent duplicates. |
+| 4 — Transactional Outbox + Kafka | `v0.4-kafka-outbox` | Events written with the ledger transaction, published after commit, at-least-once with consumer-side deduplication. |
 
-Nothing beyond those three phases is implemented. Kafka remains out of scope.
+Nothing beyond those four phases is implemented.
 
 ---
 
@@ -337,13 +339,220 @@ mechanism.
 
 ---
 
+## The transactional outbox (Phase 4)
+
+### The problem, stated plainly
+
+Nothing published events before this phase. The moment you add a naive
+`kafkaTemplate.send()` next to `paymentService.create()`, you get one of two
+bugs, and there is no ordering that avoids both:
+
+| Where you put the send | What breaks |
+|---|---|
+| **Inside** the transaction | Kafka accepts the event, the database then rolls back. An event announces a payment that does not exist. |
+| **After** the commit | The database commits, the process dies before the send. The payment exists and nobody downstream ever hears about it. |
+
+Postgres and Kafka cannot commit together. The outbox sidesteps the choice
+rather than solving it: **the event is written to Postgres in the same
+transaction as the ledger rows**, so it is exactly as durable as the payment
+itself. A separate poller moves it to Kafka afterwards.
+
+### Writing the event
+
+`OutboxRecorder.record` is annotated `@Transactional(propagation = MANDATORY)`,
+and that annotation is the whole pattern in one line. It makes recording an
+event outside a transaction an error rather than a subtle production bug: there
+is no code path that can write an outbox row which is not bound to the ledger
+rows it describes. Either both commit, or neither does.
+
+`PaymentService`, `RefundService` and `ReversalService` each call it as the last
+step of their existing `@Transactional` method. `TransactionService` was not
+touched — the ledger invariant code does not need to know events exist.
+
+### Publishing the event
+
+`OutboxPublisher` polls every second:
+
+```
+claim unpublished rows  ->  send to Kafka  ->  mark published_at
+```
+
+Rows are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, so two publisher
+instances never grab the same row and neither blocks the other.
+
+On a send failure the batch **stops** rather than aborting: events the broker
+already confirmed keep their `published_at`, and the failed one is retried next
+cycle. Rolling the whole batch back would republish events Kafka has already
+accepted, manufacturing the duplicates this design tries to keep rare.
+
+### Delivery is at-least-once. It is not exactly-once.
+
+This is worth being blunt about. If the publisher dies between the send and the
+mark, the row is still unpublished and gets sent again on the next poll.
+**That duplicate is unavoidable.** Marking before sending would trade it for a
+lost event, which is strictly worse for a payments system: a consumer can
+discard a duplicate, but nobody can recover a loss.
+
+So consumers must deduplicate. `LedgerEventConsumer` claims each event by
+inserting `(consumer_name, event_id)` into `processed_events` before doing any
+work, and lets the composite primary key settle races. A key violation means
+someone already handled it and the delivery becomes a no-op.
+
+Two details that make this actually work:
+
+- **`eventId` is the outbox row id**, so a republished event carries the *same*
+  dedupe key as its first delivery. An id generated at send time would make
+  every retry look like a new event.
+- **The claim happens before the work, not after.** Claiming afterwards leaves a
+  window where a crash loses the record of work that was actually done, turning
+  at-least-once *delivery* into at-least-once *effects*.
+
+### Topics and payload
+
+```
+ledgerguard.payments.v1     PaymentPosted
+ledgerguard.refunds.v1      PaymentRefunded
+ledgerguard.reversals.v1    TransactionReversed
+```
+
+Named `<system>.<aggregate>.<version>`. Separate topics so a consumer that only
+cares about refunds is not made to filter everything else, and the `v1` is in
+the name so a breaking payload change becomes a new topic rather than a silent
+deserialization failure.
+
+Every message uses the same envelope:
+
+```json
+{
+  "eventId":       "uuid",
+  "eventType":     "PaymentPosted",
+  "aggregateType": "Payment",
+  "aggregateId":   "uuid",
+  "occurredAt":    "2026-09-10T12:18:09Z",
+  "payload":       { "paymentId": "...", "amountMinor": 1234, "currency": "USD" }
+}
+```
+
+The payload carries enough for a consumer to act **without calling back into
+the API** — a refund event includes the running refunded total and what remains
+refundable, so nothing has to be looked up.
+
+**Amounts stay integer minor units on the wire.** Serialising `12.34` would
+reintroduce the precision problem Phase 1 exists to prevent, at the system
+boundary where it is hardest to notice. `occurredAt` is pinned to a string with
+`@JsonFormat`, because with default Jackson settings an `Instant` serialises as
+a float epoch and a published wire contract should not depend on a framework
+default somebody could change.
+
+`aggregateId` is the Kafka message key, so every event about one payment lands
+in one partition and stays ordered.
+
+---
+
+## Failure demo: Kafka goes down, nothing is lost
+
+Run this yourself. It is the point of the whole phase.
+
+**Prerequisites:** `docker compose up -d` and `mvn spring-boot:run`, both
+healthy. Commands are Git Bash.
+
+### 1. Create two accounts and stop Kafka
+
+```bash
+ALICE=$(curl -s -X POST http://localhost:8080/accounts -H "Content-Type: application/json" -d '{"name":"Alice","currency":"USD"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); BOB=$(curl -s -X POST http://localhost:8080/accounts -H "Content-Type: application/json" -d '{"name":"Bob","currency":"USD"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'); echo "ALICE=$ALICE BOB=$BOB"
+```
+
+```bash
+docker compose stop kafka
+```
+
+### 2. Submit a payment with the broker down
+
+```bash
+RESP=$(curl -s -w "\nHTTP %{http_code}" -X POST http://localhost:8080/payments -H "Content-Type: application/json" -H "Idempotency-Key: kafka-demo-$(date +%s)" -d "{\"sourceAccountId\":\"$ALICE\",\"destinationAccountId\":\"$BOB\",\"amount\":\"12.34\",\"currency\":\"USD\",\"description\":\"kafka down\"}"); echo "$RESP" | tail -1; PID=$(echo "$RESP" | sed -n 's/.*"paymentId":"\([^"]*\)".*/\1/p'); echo "PAYMENT=$PID"
+```
+
+**It returns `HTTP 201`.** The request path never touches Kafka.
+
+### 3. Confirm the ledger committed anyway
+
+```bash
+docker exec ledgerguard-postgres psql -U ledgerguard -d ledgerguard -tAc "SELECT (SELECT COUNT(*) FROM payments WHERE id='$PID') AS payment, (SELECT COUNT(*) FROM postings WHERE transaction_id=(SELECT transaction_id FROM payments WHERE id='$PID')) AS postings;"
+```
+
+Prints `1|2` — the payment and both postings are committed and durable.
+
+### 4. Confirm the event is sitting unpublished
+
+```bash
+docker exec ledgerguard-postgres psql -U ledgerguard -d ledgerguard -tAc "SELECT event_type, COALESCE(published_at::text,'NOT PUBLISHED'), publish_attempts FROM outbox_events WHERE aggregate_id='$PID';"
+```
+
+`NOT PUBLISHED`, with `publish_attempts` climbing as the poller retries against
+a broker that is not there. Nothing is lost and nothing is stuck.
+
+### 5. Restart Kafka
+
+```bash
+docker compose start kafka
+```
+
+### 6. Watch it publish itself, with no intervention
+
+```bash
+for i in $(seq 1 30); do docker exec ledgerguard-postgres psql -U ledgerguard -d ledgerguard -tAc "SELECT COALESCE(published_at::text,'NOT PUBLISHED') FROM outbox_events WHERE aggregate_id='$PID';"; sleep 2; done
+```
+
+Within a few seconds it flips from `NOT PUBLISHED` to a timestamp. Nothing was
+retried by hand.
+
+### 7. Confirm the consumer processed it exactly once
+
+```bash
+docker exec ledgerguard-postgres psql -U ledgerguard -d ledgerguard -tAc "SELECT COUNT(*) FROM processed_events WHERE event_id=(SELECT id FROM outbox_events WHERE aggregate_id='$PID');"
+```
+
+Prints `1`. And nothing is left behind:
+
+```bash
+docker exec ledgerguard-postgres psql -U ledgerguard -d ledgerguard -tAc "SELECT COUNT(*) FROM outbox_events WHERE published_at IS NULL;"
+```
+
+### Measured run
+
+Executed on 2026-09-10 against a running instance:
+
+```
+Kafka stopped:              payment returned HTTP 201
+Ledger after the request:   1 payment, 2 postings, balance -1234
+Outbox state:               published_at NULL, publish_attempts 3 and climbing
+Kafka restarted:            published automatically after ~3s (attempts 5)
+Consumer:                   processed_events rows for that event = 1
+Unpublished events left:    0
+```
+
+### A Git Bash wrinkle
+
+Git Bash rewrites arguments that look like absolute paths, so
+`docker exec ledgerguard-kafka /opt/kafka/bin/kafka-topics.sh ...` becomes
+`C:/Program Files/Git/opt/kafka/...` and fails. Prefix those with
+`MSYS_NO_PATHCONV=1`:
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec ledgerguard-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+```
+
+The `psql` commands above are unaffected because they pass no absolute paths.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
 
 - **JDK 21**
 - **Maven 3.9+**
-- **Docker** (for the local Postgres, and for the integration test)
+- **Docker** (for the local Postgres and Kafka, and for the integration tests)
 
 ### JAVA_HOME — normally nothing to do
 
@@ -386,9 +595,19 @@ local repository (`C:\Users\vahin\.m2`) out of synced folders.
 docker compose up -d
 ```
 
-That runs `postgres:16-alpine` on **localhost:5432** with database `ledgerguard`,
-user `ledgerguard`, password `ledgerguard` — matching the defaults in
-`application.yml`.
+That runs two containers: `postgres:16-alpine` on **localhost:5432** with
+database `ledgerguard`, user `ledgerguard`, password `ledgerguard`, and
+`apache/kafka:3.9.0` in KRaft mode on **localhost:9092**. Both match the
+defaults in `application.yml`.
+
+Wait for both to report healthy before starting the app:
+
+```bash
+docker compose ps
+```
+
+The app starts fine without Kafka — that is what the outbox is for — but the
+failure demo below is easier to follow if it starts healthy.
 
 To point at a different database instead, override the environment variables:
 
@@ -398,14 +617,17 @@ To point at a different database instead, override the environment variables:
 | `LEDGERGUARD_DB_USER` | `ledgerguard` |
 | `LEDGERGUARD_DB_PASSWORD` | `ledgerguard` |
 | `LEDGERGUARD_PORT` | `8080` |
+| `LEDGERGUARD_KAFKA_BOOTSTRAP` | `localhost:9092` |
+| `LEDGERGUARD_KAFKA_GROUP` | `ledgerguard-ledger-events` |
 
 ### 2. Migrations
 
 **Nothing to run by hand.** Flyway applies every migration in `db/migration`
 automatically at startup: `V1__init.sql` creates `accounts`, `transactions`,
 `payments` and `postings`; `V2__refunds_and_reversals.sql` adds `refunds` and
-`reversals`; `V3__idempotency.sql` adds `idempotency_keys`. All of them arrive
-with their foreign keys, not-null and check constraints.
+`reversals`; `V3__idempotency.sql` adds `idempotency_keys`;
+`V4__outbox.sql` adds `outbox_events` and `processed_events`. All of them
+arrive with their foreign keys, not-null and check constraints.
 
 Hibernate is set to `ddl-auto: validate`, so Flyway owns the schema outright and
 the app refuses to start if the JPA mappings and the migrated schema disagree.
@@ -430,7 +652,7 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-61 tests across eight classes:
+74 tests across ten classes:
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -442,10 +664,20 @@ mvn test
 | `RefundReversalFlowIntegrationTest` | 6 | refund/reversal flows plus the atomicity proof |
 | `RequestFingerprintTest` | 10 | key-order independence, and what must change the fingerprint |
 | `IdempotencyFlowIntegrationTest` | 10 | replay, conflict, scoping, and the concurrency race |
+| `OutboxRecorderTest` | 7 | envelope shape, stable event ids, integer amounts on the wire |
+| `OutboxKafkaFlowIntegrationTest` | 6 | publish, consume once, redelivery, and outbox atomicity |
 
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
 because the schema constraints are part of the product.
+
+`OutboxKafkaFlowIntegrationTest` also starts a real Kafka broker, because the
+delivery guarantee is a property of two systems and their failure modes and
+cannot be tested against a mock. It uses Testcontainers' `ConfluentKafkaContainer`
+rather than the `apache/kafka` image used in `docker-compose.yml`: that image
+formats its storage before Testcontainers can inject the mapped port, so
+`advertised.listeners` is still `0.0.0.0` and the broker refuses to start. Both
+are KRaft; the difference is only in how the port is negotiated.
 
 ---
 
@@ -667,6 +899,11 @@ V2 ── refunds      (id, payment_id, transaction_id UNIQUE,
 V3 ── idempotency_keys (id, idempotency_key, endpoint, request_fingerprint,
                     response_status, response_body, created_at, expires_at,
                     UNIQUE (endpoint, idempotency_key))
+
+V4 ── outbox_events    (id, aggregate_type, aggregate_id, event_type, topic,
+                    payload, occurred_at, published_at, publish_attempts)
+      processed_events (consumer_name, event_id, processed_at,
+                    PRIMARY KEY (consumer_name, event_id))
 ```
 
 `postings.currency` is carried per posting rather than inherited from the
@@ -681,9 +918,15 @@ money that moves — money still moves only through postings.
 
 ## Not in this phase
 
-Kafka and event streaming are explicitly out of scope for Phase 3 and are not
-implemented. Nothing sweeps expired idempotency keys yet either; `expires_at`
-is written but never read.
+Settlement, reconciliation and anything ML-shaped are out of scope for Phase 4
+and are not implemented.
 
-Refunds and reversals landed in Phase 2, and idempotency in Phase 3. Both are
-documented above.
+Two pieces of deliberate debt, both documented where they live:
+
+- Nothing sweeps expired idempotency keys. `expires_at` is written and never
+  read, so `idempotency_keys` grows without bound.
+- Nothing prunes published outbox rows either. `outbox_events` keeps every
+  event forever, which is useful for auditing and unsustainable for storage.
+
+Both need a retention job, which is a phase of its own rather than something
+to bolt on here.

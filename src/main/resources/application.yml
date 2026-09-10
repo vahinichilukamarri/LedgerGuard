@@ -22,9 +22,45 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: false
 
+  kafka:
+    bootstrap-servers: ${LEDGERGUARD_KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Wait for all in-sync replicas. An event the broker has not durably
+      # accepted must not be marked published in the outbox.
+      acks: all
+      properties:
+        # Fail fast when the broker is unreachable instead of blocking the
+        # publisher thread. The rows simply stay unpublished and get retried.
+        max.block.ms: 5000
+        delivery.timeout.ms: 10000
+        request.timeout.ms: 5000
+    consumer:
+      group-id: ${LEDGERGUARD_KAFKA_GROUP:ledgerguard-ledger-events}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    admin:
+      # The app must start even when Kafka is down; the outbox is what makes
+      # that safe. Topics are created once the broker appears.
+      fail-fast: false
+      auto-create: true
+
+ledgerguard:
+  outbox:
+    publisher:
+      enabled: true
+      poll-interval-ms: 1000
+      batch-size: 100
+      send-timeout-seconds: 10
+  kafka:
+    consumer-group: ${LEDGERGUARD_KAFKA_GROUP:ledgerguard-ledger-events}
+
 server:
   port: ${LEDGERGUARD_PORT:8080}
 
 logging:
   level:
     com.ledgerguard: INFO
+    org.apache.kafka.clients.NetworkClient: ERROR

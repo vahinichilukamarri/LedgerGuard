@@ -34,7 +34,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Phase 3 against a real PostgreSQL, because the concurrency guarantee is a
  * property of a UNIQUE index and cannot be tested against a fake.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {
+                // No Kafka container here. These tests are about the ledger, not
+                // delivery, and leaving the publisher on would make every poll block
+                // on an unreachable broker. Outbox rows are still written; nothing
+                // drains them, which is exactly the Kafka-is-down state.
+                "ledgerguard.outbox.publisher.enabled=false",
+                "spring.kafka.listener.auto-startup=false"
+        })
 @Testcontainers
 class IdempotencyFlowIntegrationTest {
 

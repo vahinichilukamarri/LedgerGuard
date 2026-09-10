@@ -3,6 +3,7 @@ package com.ledgerguard.refunds;
 import com.ledgerguard.payments.Payment;
 import com.ledgerguard.payments.PaymentNotFoundException;
 import com.ledgerguard.payments.PaymentRepository;
+import com.ledgerguard.outbox.OutboxRecorder;
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.postings.Posting;
 import com.ledgerguard.postings.PostingType;
@@ -49,7 +50,10 @@ class RefundServiceTest {
     private final TransactionService transactions = mock(TransactionService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-02-01T09:00:00Z"), ZoneOffset.UTC);
 
-    private final RefundService service = new RefundService(refunds, payments, transactions, clock);
+    private final OutboxRecorder outbox = mock(OutboxRecorder.class);
+
+    private final RefundService service =
+            new RefundService(refunds, payments, transactions, outbox, clock);
 
     private final UUID payerAccount = UUID.randomUUID();
     private final UUID payeeAccount = UUID.randomUUID();

@@ -4,6 +4,8 @@ import com.ledgerguard.payments.Payment;
 import com.ledgerguard.payments.PaymentNotFoundException;
 import com.ledgerguard.payments.PaymentRepository;
 import com.ledgerguard.payments.PaymentStatus;
+import com.ledgerguard.outbox.EventType;
+import com.ledgerguard.outbox.OutboxRecorder;
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.refunds.dto.RefundResponse;
 import com.ledgerguard.transactions.PostedTransaction;
@@ -14,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -33,13 +36,15 @@ public class RefundService {
     private final RefundRepository refunds;
     private final PaymentRepository payments;
     private final TransactionService transactions;
+    private final OutboxRecorder outbox;
     private final Clock clock;
 
     public RefundService(RefundRepository refunds, PaymentRepository payments,
-                         TransactionService transactions, Clock clock) {
+                         TransactionService transactions, OutboxRecorder outbox, Clock clock) {
         this.refunds = refunds;
         this.payments = payments;
         this.transactions = transactions;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -82,7 +87,21 @@ public class RefundService {
         Refund refund = refunds.save(Refund.create(
                 paymentId, posted.transaction().getId(), amountMinor, currency, Instant.now(clock)));
 
-        return RefundResponse.of(refund, posted, payment.getAmountMinor(), alreadyRefunded + amountMinor);
+        long refundedTotal = alreadyRefunded + amountMinor;
+
+        // Same transaction as the refund and its postings. A consumer gets the
+        // running totals too, so it never has to call back to learn whether the
+        // payment is now fully refunded.
+        outbox.record(EventType.PAYMENT_REFUNDED, payment.getId(), Map.of(
+                "refundId", refund.getId().toString(),
+                "paymentId", payment.getId().toString(),
+                "transactionId", posted.transaction().getId().toString(),
+                "amountMinor", amountMinor,
+                "currency", currency,
+                "refundedTotalMinor", refundedTotal,
+                "remainingRefundableMinor", payment.getAmountMinor() - refundedTotal));
+
+        return RefundResponse.of(refund, posted, payment.getAmountMinor(), refundedTotal);
     }
 
     /** Refundable amount remaining on a payment, derived from the refund rows. */

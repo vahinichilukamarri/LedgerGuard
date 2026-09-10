@@ -3,6 +3,8 @@ package com.ledgerguard.payments;
 import com.ledgerguard.accounts.Account;
 import com.ledgerguard.accounts.AccountService;
 import com.ledgerguard.config.Money;
+import com.ledgerguard.outbox.EventType;
+import com.ledgerguard.outbox.OutboxRecorder;
 import com.ledgerguard.payments.dto.PaymentResponse;
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.transactions.PostedTransaction;
@@ -13,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -32,13 +35,15 @@ public class PaymentService {
     private final PaymentRepository payments;
     private final AccountService accounts;
     private final TransactionService transactions;
+    private final OutboxRecorder outbox;
     private final Clock clock;
 
     public PaymentService(PaymentRepository payments, AccountService accounts,
-                          TransactionService transactions, Clock clock) {
+                          TransactionService transactions, OutboxRecorder outbox, Clock clock) {
         this.payments = payments;
         this.accounts = accounts;
         this.transactions = transactions;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -66,6 +71,17 @@ public class PaymentService {
                         NewPosting.debit(destination.getId(), amountMinor, normalizedCurrency)));
 
         payment.markPosted(posted.transaction().getId());
+
+        // Written in this same transaction, so the event is exactly as durable
+        // as the payment. If anything below fails, the event disappears with it;
+        // if this commits, the event is guaranteed to reach Kafka eventually.
+        outbox.record(EventType.PAYMENT_POSTED, payment.getId(), Map.of(
+                "paymentId", payment.getId().toString(),
+                "transactionId", posted.transaction().getId().toString(),
+                "sourceAccountId", source.getId().toString(),
+                "destinationAccountId", destination.getId().toString(),
+                "amountMinor", amountMinor,
+                "currency", normalizedCurrency));
 
         return PaymentResponse.of(payment, posted);
     }

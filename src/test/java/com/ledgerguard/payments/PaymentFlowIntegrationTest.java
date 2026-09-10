@@ -38,7 +38,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the schema constraints are the product, so they get tested on the engine that
  * will actually run them.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {
+                // No Kafka container here. These tests are about the ledger, not
+                // delivery, and leaving the publisher on would make every poll block
+                // on an unreachable broker. Outbox rows are still written; nothing
+                // drains them, which is exactly the Kafka-is-down state.
+                "ledgerguard.outbox.publisher.enabled=false",
+                "spring.kafka.listener.auto-startup=false"
+        })
 @Testcontainers
 class PaymentFlowIntegrationTest {
 

@@ -1,5 +1,7 @@
 package com.ledgerguard.reversals;
 
+import com.ledgerguard.outbox.EventType;
+import com.ledgerguard.outbox.OutboxRecorder;
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.postings.Posting;
 import com.ledgerguard.postings.PostingRepository;
@@ -15,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -37,14 +40,17 @@ public class ReversalService {
     private final TransactionRepository transactionRepository;
     private final PostingRepository postings;
     private final TransactionService transactions;
+    private final OutboxRecorder outbox;
     private final Clock clock;
 
     public ReversalService(ReversalRepository reversals, TransactionRepository transactionRepository,
-                           PostingRepository postings, TransactionService transactions, Clock clock) {
+                           PostingRepository postings, TransactionService transactions,
+                           OutboxRecorder outbox, Clock clock) {
         this.reversals = reversals;
         this.transactionRepository = transactionRepository;
         this.postings = postings;
         this.transactions = transactions;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -79,6 +85,14 @@ public class ReversalService {
 
         Reversal reversal = reversals.save(Reversal.create(
                 transactionId, posted.transaction().getId(), Instant.now(clock)));
+
+        // Keyed on the ORIGINAL transaction id, so a consumer watching that
+        // transaction sees the reversal land on the same partition, after it.
+        outbox.record(EventType.TRANSACTION_REVERSED, transactionId, Map.of(
+                "reversalId", reversal.getId().toString(),
+                "originalTransactionId", transactionId.toString(),
+                "reversalTransactionId", posted.transaction().getId().toString(),
+                "currency", original.getCurrency()));
 
         return ReversalResponse.of(reversal, posted);
     }
