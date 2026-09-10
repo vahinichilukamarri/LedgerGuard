@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.ledgerguard.postings.Posting;
 import com.ledgerguard.postings.PostingRepository;
 import com.ledgerguard.support.TestIdempotency;
+import com.ledgerguard.support.LedgerPostgres;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,7 +53,7 @@ class RefundReversalFlowIntegrationTest {
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> POSTGRES = LedgerPostgres.newContainer();
 
     @Autowired
     private TestRestTemplate rest;
@@ -309,6 +310,110 @@ class RefundReversalFlowIntegrationTest {
         assertThat(countAll("refunds")).isEqualTo(refundsBefore + 1);
     }
 
+    // ---------- regression: refund and reversal must not both return the money ----------
+
+    /*
+     * These four lock in the Phase 6 fix. Property testing shrank the defect to
+     * a two-step chain — pay one minor unit, refund it, reverse the payment —
+     * after which the payer's balance was +1: better off than before they paid,
+     * with every transaction involved still perfectly balanced. Both orderings
+     * are covered here, because both were broken and each is blocked by a
+     * different guard.
+     */
+
+    @Test
+    @DisplayName("regression: a refunded payment cannot then be reversed")
+    void refundThenReverseIsRejected() {
+        UUID payer = createAccount("Chain Payer A");
+        UUID payee = createAccount("Chain Payee A");
+
+        JsonNode payment = pay(payer, payee, "0.01");
+        UUID paymentId = UUID.fromString(payment.get("paymentId").asText());
+        UUID originalTxn = UUID.fromString(payment.get("transaction").get("id").asText());
+
+        assertThat(refund(paymentId, "0.01").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(balanceOf(payer)).as("the refund made the payer whole").isZero();
+
+        ResponseEntity<JsonNode> reversal = reverse(originalTxn);
+
+        assertThat(reversal.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(reversal.getBody().get("error").asText())
+                .isEqualTo("refunded_payment_cannot_be_reversed");
+        assertThat(countReversals(originalTxn)).isZero();
+        assertThat(balanceOf(payer))
+                .as("the payer must not end up better off than before they paid")
+                .isZero();
+        assertThat(balanceOf(payee)).isZero();
+    }
+
+    @Test
+    @DisplayName("regression: a reversed payment cannot then be refunded")
+    void reverseThenRefundIsRejected() {
+        UUID payer = createAccount("Chain Payer B");
+        UUID payee = createAccount("Chain Payee B");
+
+        JsonNode payment = pay(payer, payee, "0.01");
+        UUID paymentId = UUID.fromString(payment.get("paymentId").asText());
+        UUID originalTxn = UUID.fromString(payment.get("transaction").get("id").asText());
+
+        assertThat(reverse(originalTxn).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(balanceOf(payer)).as("the reversal gave the money back").isZero();
+
+        ResponseEntity<JsonNode> refund = refund(paymentId, "0.01");
+
+        assertThat(refund.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(refund.getBody().get("message").asText()).contains("REVERSED");
+        assertThat(countRefunds(paymentId)).isZero();
+        assertThat(balanceOf(payer))
+                .as("the payer must not be paid back twice")
+                .isZero();
+        assertThat(balanceOf(payee)).isZero();
+    }
+
+    @Test
+    @DisplayName("reversing an unrefunded payment still works, and marks the payment REVERSED")
+    void reversingAnUnrefundedPaymentMarksIt() {
+        UUID payer = createAccount("Chain Payer C");
+        UUID payee = createAccount("Chain Payee C");
+
+        JsonNode payment = pay(payer, payee, "10.25");
+        UUID paymentId = UUID.fromString(payment.get("paymentId").asText());
+        UUID originalTxn = UUID.fromString(payment.get("transaction").get("id").asText());
+
+        assertThat(reverse(originalTxn).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        assertThat(statusOf(paymentId))
+                .as("the reversal must be visible on the payment, not only in the reversals table")
+                .isEqualTo("REVERSED");
+        assertThat(balanceOf(payer)).isZero();
+        assertThat(balanceOf(payee)).isZero();
+    }
+
+    @Test
+    @DisplayName("a refund's own transaction can still be reversed; only the payment's is guarded")
+    void reversingARefundTransactionIsStillAllowed() {
+        UUID payer = createAccount("Chain Payer D");
+        UUID payee = createAccount("Chain Payee D");
+
+        JsonNode payment = pay(payer, payee, "10.00");
+        UUID paymentId = UUID.fromString(payment.get("paymentId").asText());
+
+        ResponseEntity<JsonNode> refund = refund(paymentId, "4.00");
+        assertThat(refund.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        UUID refundTxn = UUID.fromString(refund.getBody().get("transaction").get("id").asText());
+        assertThat(balanceOf(payer)).isEqualTo(-600L);
+
+        // The guard is on the payment's transaction. A refund's transaction has
+        // no payment hanging off it and stays reversible, which undoes the
+        // refund exactly.
+        assertThat(reverse(refundTxn).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(balanceOf(payer)).isEqualTo(-1000L);
+        assertThat(balanceOf(payee)).isEqualTo(1000L);
+        assertThat(statusOf(paymentId))
+                .as("reversing a refund does not reverse the payment")
+                .isEqualTo("POSTED");
+    }
+
     // ---------- direct database reads ----------
 
     private long countAll(String table) {
@@ -318,6 +423,11 @@ class RefundReversalFlowIntegrationTest {
     private long countRefunds(UUID paymentId) {
         return jdbc.queryForObject(
                 "SELECT COUNT(*) FROM refunds WHERE payment_id = ?", Long.class, paymentId);
+    }
+
+    private String statusOf(UUID paymentId) {
+        return jdbc.queryForObject(
+                "SELECT status FROM payments WHERE id = ?", String.class, paymentId);
     }
 
     private long countReversals(UUID originalTransactionId) {

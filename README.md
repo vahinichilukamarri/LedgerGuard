@@ -2,9 +2,9 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 5 — Settlement Simulator + Reconciliation.** The ledger
-is now checked against an independent external record, because being
-self-consistent and being correct are not the same thing.
+**Current phase: Phase 6 — Verification & Property-Based Testing.** Everything
+built in Phases 1-5 is now stress-tested with randomized inputs rather than
+hand-picked ones. It found a real defect; see [the bug log](#bug-log).
 
 | Phase | Tag | What it added |
 |---|---|---|
@@ -13,8 +13,9 @@ self-consistent and being correct are not the same thing.
 | 3 — Idempotency & Safe Retries | `v0.3-idempotency` | Required idempotency keys, byte-identical replay, and exactly-one-effect under concurrent duplicates. |
 | 4 — Transactional Outbox + Kafka | `v0.4-kafka-outbox` | Events written with the ledger transaction, published after commit, at-least-once with consumer-side deduplication. |
 | 5 — Settlement Simulator & Reconciliation | `v0.5-reconciliation` | An independent external settlement source, six discrepancy classifications, and persisted incidents with evidence linkage. |
+| 6 — Verification & Property-Based Testing | `v0.6-verification` | 37 jqwik properties over randomized payments, refunds, reversals, currencies, amounts and replays. No new feature; one defect found and fixed. |
 
-Nothing beyond those five phases is implemented.
+Nothing beyond those six phases is implemented.
 
 ---
 
@@ -811,6 +812,290 @@ UNEXPECTED_EXTERNAL_TRANSACTION  HIGH     external 9900     internal side null
 
 ---
 
+## Verification (Phase 6)
+
+Phase 6 adds no feature. It adds a second way of asking whether Phases 1-5 are
+correct.
+
+### What property-based testing is
+
+An example-based test names an input and asserts an output: refund $4.00 of a
+$10.25 payment, expect `625` to remain. A property-based test names a *rule* and
+lets a generator invent the inputs — hundreds of them per run, chosen to include
+the awkward ones — then asserts the rule held for every single one.
+
+The two find different bugs, and the difference is not about volume. An
+example-based test can only fail in a way its author already imagined; that is
+what makes it a good specification and a poor search. A property test is the
+search. It has no opinion about which cases matter, which is exactly why it
+reaches the ones nobody thought to write down.
+
+**This does not replace the Phase 1-5 tests, and they were not touched.** They
+remain the readable specification of what the system does — a named scenario with
+concrete numbers is how you explain a refund cap to another person, and no
+property statement communicates that. The properties are a net cast around them.
+Where the two overlap, the example test is the one that says what is *supposed*
+to happen; the property only says that whatever happens is consistent.
+
+When a property fails, jqwik **shrinks** the counterexample: it repeatedly
+simplifies the failing input while the failure persists, so what you are handed
+is the smallest case that still breaks. That is what turned the defect below from
+"something went wrong at 9,683,895 minor units after five operations" into "pay
+1, refund 1, reverse" — and the second form is a bug report, while the first is
+only a symptom.
+
+### The generators
+
+All in `properties/LedgerArbitraries.java`, deliberately in one class: a property
+is only as good as the inputs it sees, so what those inputs are should be
+readable in one place.
+
+| Generator | Produces | Edge cases forced on purpose |
+|---|---|---|
+| `supportedCurrencies` | `USD EUR GBP CHF` (2dp), `JPY KRW VND CLP` (**0dp**), `KWD BHD JOD TND OMR` (**3dp**) | weighted so the unusual minor units are not rare; a 2dp-only generator tests one third of the arithmetic |
+| `unusableCurrencies` | malformed (`US`, `USDD`, `1AB`, empty, `u$d`), well-formed but unknown (`ZZZ`, `QQQ`), known with **no minor unit** (`XAU`, `XPT`, `XDR`, `XXX`) | all three distinct failure modes, which are three different paths through `Money` |
+| `mixedCaseCurrencies` | every letter-case permutation of a supported code | `usd`, `UsD`, `USD` must be one currency |
+| `chainAmountsMinor` | 1 to 10^12 minor units | `1`, `2`, `3`, `99`, `100`, `101`, `999`, `1000`, `Integer.MAX_VALUE` — a single minor unit would essentially never appear in a uniform draw over twelve orders of magnitude, and it is where off-by-one lives |
+| `boundaryAmountsMinor` | `Integer.MAX_VALUE`, `Long.MAX_VALUE/2`, `Long.MAX_VALUE-1`, `Long.MAX_VALUE` | the actual top of the representation |
+| `subMinorAmounts` | a decimal with exactly one more fraction digit than its currency has, final digit non-zero | 10.255 USD, 10.5 JPY, 1.2345 KWD — must be **rejected, never rounded** |
+| `refundPlans` | a payment amount plus partial-refund splits summing to at most it, normalised so the **last partial lands exactly on the remainder** | payments of 2, 3 and 5 minor units, split — the sharpest possible test of the cap |
+| `refundPercents` | 1-130% of the payment | over 100% is included so the generator produces refunds that must fail |
+| `operationChains` | sequences of 1-6 steps over `REFUND`, `REVERSE_PAYMENT`, `REVERSE_LAST_REFUND`, `REPLAY_LAST` | invalid sequences are generated deliberately — double reversal, refund past the cap, replay of a refused step |
+| `currencyLegs` | posting sets across 1-3 currencies, each currency independently balanced or skewed by a generated delta | skews of plus/minus 1 and plus/minus 1000, so one generator produces sets that must be accepted **and** sets that must be rejected |
+
+Amounts are generated as **minor units** and converted to decimals with
+`Money.toMajorUnits`, so a generated case is always exactly representable in its
+currency — unless being unrepresentable is the point of that generator.
+
+### The properties
+
+37 properties across eight classes. **In-memory** where the property is about a
+pure function; **Testcontainers PostgreSQL** wherever it depends on persistence,
+a schema constraint or a row lock actually holding, rather than on in-memory
+logic agreeing with itself.
+
+| Property | Class | Generators | Runs against | Tries |
+|---|---|---|---|---|
+| Postings are accepted **if and only if** every currency nets to zero | `BalanceInvariantPropertyTest` | `currencyLegs` | in-memory | 1000 |
+| Verdict is independent of posting order | `BalanceInvariantPropertyTest` | `currencyLegs` + shuffle seed | in-memory | 1000 |
+| Currencies never net against each other (two currencies skewed to cancel exactly) | `BalanceInvariantPropertyTest` | two distinct currencies, amount, skew | in-memory | 1000 |
+| Adding balanced pairs never turns a good transaction bad | `BalanceInvariantPropertyTest` | currency, amount, pair count | in-memory | 1000 |
+| A single posting is never a transaction | `BalanceInvariantPropertyTest` | currency, amount | in-memory | 1000 |
+| Overflowing sums fail loudly instead of wrapping to a false zero | `BalanceInvariantPropertyTest` | amounts above `Long.MAX_VALUE/2` | in-memory | 1000 |
+| Minor units round-trip exactly through decimal | `MoneyPropertyTest` | `supportedCurrencies`, `chainAmountsMinor` | in-memory | 1000 |
+| ...and still do at the boundaries of the representation | `MoneyPropertyTest` | `boundaryAmountsMinor` | in-memory | 1000 |
+| Decimal scale always matches the currency | `MoneyPropertyTest` | `supportedCurrencies` | in-memory | 1000 |
+| Sub-minor precision is always rejected, never rounded | `MoneyPropertyTest` | `subMinorAmounts` | in-memory | 1000 |
+| Unusable currency codes are rejected at every entry point | `MoneyPropertyTest` | `unusableCurrencies` | in-memory | 1000 |
+| Currency case is normalised, not honoured | `MoneyPropertyTest` | `mixedCaseCurrencies` | in-memory | 1000 |
+| Non-positive amounts are never postings | `MoneyPropertyTest` | `supportedCurrencies`, amounts | in-memory | 1000 |
+| Amounts past the representation are rejected, not truncated | `MoneyPropertyTest` | `boundaryAmountsMinor` | in-memory | 1000 |
+| **Every persisted transaction nets to zero per currency** | `LedgerPersistencePropertyTest` | currency, amount | **Postgres** | 120 |
+| The persisted amount is the requested amount in minor units | `LedgerPersistencePropertyTest` | currency, amount | **Postgres** | 120 |
+| **Postings in different currencies never net against each other** | `LedgerPersistencePropertyTest` | two currencies, two amounts | **Postgres** | 120 |
+| A payment in the wrong currency is refused and writes nothing | `LedgerPersistencePropertyTest` | two currencies, amount | **Postgres** | 120 |
+| Every refused payment writes nothing at all | `LedgerPersistencePropertyTest` | currency, amount, rejection kind | **Postgres** | 120 |
+| **One key means exactly one financial effect**, sequential replays | `IdempotencyPropertyTest` | currency, amount, replay count, inter-replay gap | **Postgres** | 100 |
+| **...and the same under a genuine race**, N threads released together | `IdempotencyPropertyTest` | currency, amount, thread count 2-8 | **Postgres** | 25 |
+| A replayed refund has exactly one financial effect | `IdempotencyPropertyTest` | currency, amount, replay count | **Postgres** | 100 |
+| A replayed reversal has exactly one financial effect | `IdempotencyPropertyTest` | currency, amount, replay count | **Postgres** | 100 |
+| **Refunds never exceed the refundable amount, across any sequence of partials** | `RefundCapPropertyTest` | `refundPlans` | **Postgres** | 100 |
+| One minor unit past the cap is always refused — and does not consume the cap | `RefundCapPropertyTest` | `refundPlans` | **Postgres** | 100 |
+| A refund is accepted **iff** it fits in what remains, in any order | `RefundCapPropertyTest` | currency, amount, `refundPercents` | **Postgres** | 100 |
+| **A transaction and its reversal net to zero together** | `ReversalPropertyTest` | currency, amount | **Postgres** | 80 |
+| **A transaction can only ever be reversed once** | `ReversalPropertyTest` | currency, amount, attempt count | **Postgres** | 80 |
+| Reversing a refund undoes exactly the refund | `ReversalPropertyTest` | currency, amount | **Postgres** | 80 |
+| Reversing a reversal reinstates the original exactly | `ReversalPropertyTest` | currency, amount | **Postgres** | 80 |
+| **No chain of operations ever creates money** | `TransactionSequencePropertyTest` | `operationChains`, `refundPercents` | **Postgres** | 80 |
+| No chain of operations ever unbalances the ledger | `TransactionSequencePropertyTest` | `operationChains` | **Postgres** | 80 |
+| Refunds across any chain never exceed the payment | `TransactionSequencePropertyTest` | `operationChains` | **Postgres** | 80 |
+| **Redelivering one event handles it exactly once** | `EventReplayPropertyTest` | event type, delivery count 1-8 | **Postgres** | 100 |
+| Interleaved redeliveries never suppress a genuine event | `EventReplayPropertyTest` | event count, copies, shuffle seed | **Postgres** | 100 |
+| **Replaying a processed event never changes financial state** | `EventReplayPropertyTest` | event type, delivery count | **Postgres** | 100 |
+| Unparseable messages are skipped without claiming anything | `EventReplayPropertyTest` | malformed strings | **Postgres** | 100 |
+
+#### Why those tries counts
+
+jqwik's default is 1000. The in-memory properties run at that default, unchanged:
+they touch nothing but `BigDecimal` and `java.util.Currency`, so tries are free
+and there is no reason to run fewer — all fourteen of them finish in well under a
+second together.
+
+The database-backed properties are lowered to **80-120**, and the concurrent one
+to **25**. One try there creates accounts and performs one to seven full write
+cycles against a real PostgreSQL — five to twenty round trips, some taking a row
+lock. At 1000 tries a single property would run for tens of minutes and the suite
+would stop being something anyone runs before pushing.
+
+The compensation is in the generators rather than the count: the boundary values
+are **forced as edge cases** instead of being waited for. A payment of one minor
+unit, a zero-decimal currency, a refund of exactly the remainder — none of those
+would show up reliably in 1000 uniform draws either, and all of them appear in
+every run here. The defect below was found at 80 tries and shrank to a
+three-operation reproducer.
+
+The concurrent property is 25 tries because each spawns up to eight threads that
+genuinely block on the PostgreSQL unique index while the winner finishes its
+ledger writes. Across the property that is still several hundred real races.
+
+### Testcontainers
+
+Container configuration lives in one place, `support/LedgerPostgres`, and is used
+two ways:
+
+- `newContainer()` — a fresh container per JUnit Jupiter class, which is what
+  every Phase 1-5 integration test uses. Those keep their own database, and that
+  isolation is load-bearing: `ReconciliationFlowIntegrationTest` reconciles the
+  **entire** ledger, so rows written by another class would surface in its
+  results as discrepancies.
+- `shared()` — one container for the whole property suite, started once. Every
+  property either scopes its assertions to accounts created in that try, or
+  asserts something true of any ledger (the whole-ledger sum is zero no matter
+  who else wrote to it), so sharing is safe there and saves starting a container
+  per property class.
+
+`support/PropertyLedger` boots the application once against that shared container
+and holds it for the life of the JVM. It has to: Spring's `SpringExtension` is a
+JUnit **Jupiter** extension and jqwik is a separate JUnit Platform engine, so a
+`@Property` method never passes through Jupiter's lifecycle and never gets a
+context injected. Rather than add a bridge library, the context is built directly.
+
+It drives the **controllers as beans** rather than over HTTP. That still runs
+everything that matters — `Money` conversion at the boundary, `IdempotencyService`,
+the services, the balance check, the real migrated schema — without a servlet
+container or a socket per try, which at these tries counts is the difference
+between a suite that runs and one that does not. The one thing it gives up is
+`ApiExceptionHandler`, so properties assert on the exception thrown rather than
+on a status code. That is the more precise assertion, and the status mapping is
+already covered by the Phase 1-5 integration tests.
+
+### Bug log
+
+Property-based testing found **one defect** in Phases 1-5. It is a real one:
+money could be created.
+
+---
+
+#### BUG-1 — A payment could be both refunded and reversed, returning more than was paid
+
+**Found by** `TransactionSequencePropertyTest.noChainOfOperationsEverCreatesMoney`
+
+**The failing case.** jqwik's original counterexample was a five-step chain at
+9,683,895 minor units. Shrunk, it is three operations:
+
+```
+currency:       "USD"
+paymentMinor:   1
+chain:          [REFUND, REVERSE_PAYMENT]
+refundPercents: [1]
+
+  sequence: PAY 1 USD
+            REFUND 1 -> accepted
+            REVERSE_PAYMENT -> accepted
+
+  the payer must never end up better off than before paying
+  Expecting actual:
+    290516L
+  to be less than or equal to:
+    0L
+```
+
+That is: pay one minor unit, refund it, then reverse the payment's transaction.
+The payer ends at **+1** — better off than before they paid. The same defect
+exists in the other order, reverse then refund.
+
+**Root cause.** Two guards, each correct in isolation, that did not know about
+each other.
+
+- `RefundService` capped refunds at `payment.amountMinor - sum(refunds)`. It had
+  no idea a reversal had already returned the money, because a reversal wrote
+  nothing to the payment and nothing to `refunds`.
+- `ReversalService` refused to reverse a transaction twice, through the UNIQUE
+  constraint on `reversals.original_transaction_id`. It had no idea the payment
+  had been partly refunded, because it worked in terms of transactions and never
+  looked at the payment.
+
+So a reversal returned the whole original amount while a refund returned part of
+it, and neither could see the other's work. Every transaction involved balanced
+perfectly — the payment, the refund and the reversal each had sum(debits) =
+sum(credits) — which is exactly why the Phase 1-5 tests never caught it, and why
+the per-transaction invariant alone was never going to. Conservation of money
+across a *chain* is a different property, and nothing had been stating it.
+
+**Why the example-based tests missed it.** `RefundReversalFlowIntegrationTest`
+covered refunds thoroughly and reversals thoroughly. It never mixed them on the
+same payment, because there was no reason to think that combination was
+interesting. That is the argument for property-based testing in one sentence.
+
+**The fix.** Make the two operations mutually exclusive on a payment, which is
+what they always were semantically: "give some of it back" is a refund, "this
+should never have happened" is a reversal, and the second only means anything if
+nothing has been given back yet.
+
+- `V6__payment_reversal_status.sql` widens the `payments_status_valid` check to
+  admit `REVERSED`. No backfill is needed: no existing row could hold that value,
+  because nothing could set it.
+- `PaymentStatus` gains `REVERSED`, and `Payment.markReversed()` is the one-way
+  transition out of `POSTED`.
+- `ReversalService.reverse` now looks up the payment settled by the transaction,
+  via `PaymentRepository.findByTransactionIdForUpdate` — taking **the same row
+  lock, in the same order, as the refund path**, so a refund and a reversal
+  racing on one payment serialise instead of both succeeding. If that payment has
+  any refunds it throws `RefundedPaymentCannotBeReversedException` (**422
+  `refunded_payment_cannot_be_reversed`**); otherwise it marks the payment
+  `REVERSED` in the same database transaction as the negating postings.
+- `RefundService`'s existing `status != POSTED` guard then refuses a refund
+  against a `REVERSED` payment, with no change needed there.
+
+A refund's *own* transaction is still reversible, and so is a reversal's. The
+guard is specifically on a payment's transaction, because a payment is the only
+thing carrying a refundable amount.
+
+**The regression tests.** Four, in `RefundReversalFlowIntegrationTest`, holding
+the shrunk case at exactly one minor unit:
+
+| Test | Locks in |
+|---|---|
+| `refundThenReverseIsRejected` | the shrunk counterexample verbatim — pay 0.01, refund 0.01, reversal is 422, payer ends at 0 |
+| `reverseThenRefundIsRejected` | the other order — reversal succeeds, refund is refused, payer is not paid back twice |
+| `reversingAnUnrefundedPaymentMarksIt` | the ordinary path still works, and the payment reads `REVERSED` in the database |
+| `reversingARefundTransactionIsStillAllowed` | the guard did not over-reach: a refund's transaction is still reversible, and the payment stays `POSTED` |
+
+`noChainOfOperationsEverCreatesMoney` passes at 80 tries after the fix. One
+existing test — `OutboxKafkaFlowIntegrationTest.refundAndReversalProduceEvents` —
+was updated to use two separate payments, because it had been refunding and
+reversing the same one incidentally while testing something else entirely.
+
+---
+
+#### Not bugs, but worth writing down
+
+Two behaviours the properties surfaced that were examined and deliberately left
+alone:
+
+- **Reversing a refund does not restore refundable capacity.** Reverse a refund's
+  transaction and the payer is out of pocket the full amount again, but the
+  `refunds` row still stands, so the payment cannot be refunded again for that
+  amount. This is *conservative* — it under-refunds rather than over-refunds, and
+  no property is violated. Making refundable capacity respond to reversals of
+  refunds is a design decision, not a bug fix, and it belongs in a phase that
+  decides it deliberately.
+- **A reversal is itself reversible.** Nothing marks a reversal transaction
+  special, so reversing one reinstates the original movement. The arithmetic
+  stays exact however deep the chain goes, which
+  `reversingAReversalReinstatesTheOriginalExactly` asserts. That is consistent
+  with the stated rule — any transaction may be reversed once — rather than an
+  oversight.
+
+And one honest note about the properties themselves: JSON that parses but is not
+an event envelope (a bare array, a JSON `null`) is **not** covered by
+`unparseableMessagesAreSkippedWithoutClaimingAnything`. The consumer documents
+what it does with *unparseable* messages and makes no promise about that case, so
+asserting a behaviour there would have been inventing a contract rather than
+testing one.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -893,8 +1178,9 @@ automatically at startup: `V1__init.sql` creates `accounts`, `transactions`,
 `reversals`; `V3__idempotency.sql` adds `idempotency_keys`;
 `V4__outbox.sql` adds `outbox_events` and `processed_events`;
 `V5__reconciliation.sql` adds `settlement_records`, `reconciliation_runs` and
-`reconciliation_incidents`. All of them arrive with their foreign keys,
-not-null and check constraints.
+`reconciliation_incidents`; `V6__payment_reversal_status.sql` widens the
+`payments.status` check constraint to admit `REVERSED`. All of them arrive with
+their foreign keys, not-null and check constraints.
 
 Hibernate is set to `ddl-auto: validate`, so Flyway owns the schema outright and
 the app refuses to start if the JPA mappings and the migrated schema disagree.
@@ -919,7 +1205,8 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-104 tests across twelve classes:
+145 tests across twenty classes — 108 example-based, and 37 jqwik properties
+that between them run tens of thousands of generated cases:
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -928,7 +1215,7 @@ mvn test
 | `PaymentFlowIntegrationTest` | 6 | payment → balance, end to end |
 | `RefundServiceTest` | 6 | the refund cap and posting direction |
 | `ReversalServiceTest` | 5 | reverse-once, and exactness of the negation |
-| `RefundReversalFlowIntegrationTest` | 6 | refund/reversal flows plus the atomicity proof |
+| `RefundReversalFlowIntegrationTest` | 10 | refund/reversal flows, the atomicity proof, and the four BUG-1 regressions |
 | `RequestFingerprintTest` | 10 | key-order independence, and what must change the fingerprint |
 | `IdempotencyFlowIntegrationTest` | 10 | replay, conflict, scoping, and the concurrency race |
 | `OutboxRecorderTest` | 7 | envelope shape, stable event ids, integer amounts on the wire |
@@ -936,9 +1223,57 @@ mvn test
 | `ReconcilerTest` | 21 | all six classifications, their edge cases, and the severity scheme |
 | `ReconciliationFlowIntegrationTest` | 9 | each discrepancy injected end to end, evidence linkage, and run-to-run dedupe |
 
+Phase 6 property tests (see [Verification](#verification-phase-6) for the full
+property-to-generator map):
+
+| Class | Properties | Runs against | Covers |
+|---|---|---|---|
+| `BalanceInvariantPropertyTest` | 6 | in-memory | the balance check as a pure function: accepted iff every currency nets to zero |
+| `MoneyPropertyTest` | 8 | in-memory | minor-unit round trips, zero- and three-decimal currencies, sub-minor rejection, unusable codes, overflow |
+| `LedgerPersistencePropertyTest` | 5 | Postgres | the invariant as stored data, currency isolation, and refusals writing nothing |
+| `IdempotencyPropertyTest` | 4 | Postgres | exactly one financial effect per key, sequential and concurrent |
+| `RefundCapPropertyTest` | 3 | Postgres | the cap across arbitrary sequences of partial refunds |
+| `ReversalPropertyTest` | 4 | Postgres | exact negation, and reverse-once |
+| `TransactionSequencePropertyTest` | 3 | Postgres | whole chains of legal and illegal operations — where BUG-1 was found |
+| `EventReplayPropertyTest` | 4 | Postgres | at-least-once delivery, exactly-once effect |
+
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
 because the schema constraints are part of the product.
+
+#### Running just the property suite
+
+Every property class is tagged `property`, so the whole suite isolates by tag:
+
+```bash
+mvn test -Dgroups=property
+```
+
+Or by class-name pattern, which does the same thing here since every property
+class ends in `PropertyTest`:
+
+```bash
+mvn test -Dtest='*PropertyTest'
+```
+
+The fourteen in-memory properties need no Docker at all and finish in about a
+second:
+
+```bash
+mvn test -Dtest='MoneyPropertyTest,BalanceInvariantPropertyTest'
+```
+
+One class at a time, when a property fails and you want its output uncluttered:
+
+```bash
+mvn test -Dtest=TransactionSequencePropertyTest
+```
+
+jqwik prints the seed for every property it runs. To re-run a failing property on
+exactly the inputs that broke it, put that seed on the `@Property` annotation:
+`@Property(tries = 80, seed = "3234359065474358181")`. By default jqwik also
+re-runs the last failing sample first on the next run, so a fixed bug is
+re-checked against its own counterexample before anything else is generated.
 
 `OutboxKafkaFlowIntegrationTest` also starts a real Kafka broker, because the
 delivery guarantee is a property of two systems and their failure modes and
@@ -986,6 +1321,7 @@ payment flow needs two accounts to exist before it can be exercised at all.
 | `422` | Postings do not balance (`unbalanced_transaction`). |
 | `422` | Refund would exceed what remains refundable (`refund_amount_exceeded`). |
 | `422` | Transaction has already been reversed (`transaction_already_reversed`). |
+| `422` | Reversing a payment that has already been refunded (`refunded_payment_cannot_be_reversed`) — doing both would return more than was paid. Added in Phase 6; see [BUG-1](#bug-1--a-payment-could-be-both-refunded-and-reversed-returning-more-than-was-paid). |
 
 Every error uses the same shape — `error`, `message`, `details`, `timestamp` —
 including unparseable bodies, which would otherwise fall through to the
@@ -1190,6 +1526,9 @@ V5 ── settlement_records         (id, external_id UNIQUE, external_reference
                     transaction_id, settlement_record_id, internal_amount_minor,
                     external_amount_minor, difference_minor, currency,
                     internal_status, external_status, detail, created_at, resolved_at)
+
+V6 ── payments.status may now also be 'REVERSED' (widened CHECK constraint;
+                    no new table, no new column, no backfill)
 ```
 
 `settlement_records` is the one money-bearing table here that is **mutable**,
@@ -1208,8 +1547,9 @@ money that moves — money still moves only through postings.
 
 ## Not in this phase
 
-Property-based testing, ChaosLab and anything ML-shaped are out of scope for
-Phase 5 and are not implemented.
+ChaosLab, statistical signals and anything ML-shaped are out of scope for Phase 6
+and are not implemented. Property-based testing was the Phase 6 deliverable and
+now exists; see [Verification](#verification-phase-6).
 
 Two pieces of deliberate debt, both documented where they live:
 

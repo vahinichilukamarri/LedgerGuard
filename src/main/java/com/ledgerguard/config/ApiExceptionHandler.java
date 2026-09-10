@@ -5,6 +5,7 @@ import com.ledgerguard.idempotency.IdempotencyKeyConflictException;
 import com.ledgerguard.idempotency.IdempotencyKeyRequiredException;
 import com.ledgerguard.payments.PaymentNotFoundException;
 import com.ledgerguard.refunds.RefundAmountExceededException;
+import com.ledgerguard.reversals.RefundedPaymentCannotBeReversedException;
 import com.ledgerguard.reversals.TransactionAlreadyReversedException;
 import com.ledgerguard.transactions.TransactionNotFoundException;
 import com.ledgerguard.transactions.UnbalancedTransactionException;
@@ -62,6 +63,18 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiError> handleAlreadyReversed(TransactionAlreadyReversedException e) {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                 .body(ApiError.of("transaction_already_reversed", e.getMessage()));
+    }
+
+    /**
+     * Same family as the two above: the request was well formed, but committing
+     * it would have broken a ledger rule — here, returning more money than was
+     * paid.
+     */
+    @ExceptionHandler(RefundedPaymentCannotBeReversedException.class)
+    public ResponseEntity<ApiError> handleRefundedPaymentReversal(
+            RefundedPaymentCannotBeReversedException e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(ApiError.of("refunded_payment_cannot_be_reversed", e.getMessage()));
     }
 
     @ExceptionHandler(IdempotencyKeyRequiredException.class)

@@ -1,6 +1,7 @@
 package com.ledgerguard.idempotency;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.ledgerguard.support.LedgerPostgres;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,7 +50,7 @@ class IdempotencyFlowIntegrationTest {
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> POSTGRES = LedgerPostgres.newContainer();
 
     /** Enough threads to make the race real without making the suite slow. */
     private static final int CONCURRENT_ATTEMPTS = 20;

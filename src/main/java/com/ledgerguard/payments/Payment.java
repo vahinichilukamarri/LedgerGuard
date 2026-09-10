@@ -89,6 +89,21 @@ public class Payment {
         this.status = PaymentStatus.POSTED;
     }
 
+    /**
+     * Record that this payment's transaction has been reversed.
+     *
+     * <p>This is the payment's only route out of POSTED, and it is one-way. A
+     * REVERSED payment can no longer be refunded, which is the whole point:
+     * the reversal already gave the money back.
+     */
+    public void markReversed() {
+        if (this.status != PaymentStatus.POSTED) {
+            throw new IllegalStateException(
+                    "payment " + id + " is " + status + " and cannot be marked reversed");
+        }
+        this.status = PaymentStatus.REVERSED;
+    }
+
     public UUID getId() {
         return id;
     }

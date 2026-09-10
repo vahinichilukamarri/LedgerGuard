@@ -2,6 +2,7 @@ package com.ledgerguard.reconciliation;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.ledgerguard.support.TestIdempotency;
+import com.ledgerguard.support.LedgerPostgres;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,7 +47,7 @@ class ReconciliationFlowIntegrationTest {
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> POSTGRES = LedgerPostgres.newContainer();
 
     @Container
     @ServiceConnection

@@ -2,9 +2,12 @@ package com.ledgerguard.reversals;
 
 import com.ledgerguard.outbox.EventType;
 import com.ledgerguard.outbox.OutboxRecorder;
+import com.ledgerguard.payments.Payment;
+import com.ledgerguard.payments.PaymentRepository;
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.postings.Posting;
 import com.ledgerguard.postings.PostingRepository;
+import com.ledgerguard.refunds.RefundRepository;
 import com.ledgerguard.reversals.dto.ReversalResponse;
 import com.ledgerguard.transactions.PostedTransaction;
 import com.ledgerguard.transactions.Transaction;
@@ -32,6 +35,16 @@ import java.util.UUID;
  * <p>Because the original balanced, its exact negation balances too. The result
  * still goes through {@code TransactionService.createBalanced}, so the check
  * runs rather than being assumed.
+ *
+ * <h2>Reversals and refunds are mutually exclusive</h2>
+ *
+ * When the transaction being reversed is a payment's, two things happen that do
+ * not happen for any other transaction: the payment is refused if it has already
+ * been refunded, and it is marked {@code REVERSED} so it can never be refunded
+ * afterwards. Both directions have to be blocked, because a reversal negates the
+ * whole original while a refund returns part of it — do both and the payer gets
+ * back more than they paid, with every transaction involved still balancing
+ * perfectly. See {@link RefundedPaymentCannotBeReversedException}.
  */
 @Service
 public class ReversalService {
@@ -39,16 +52,21 @@ public class ReversalService {
     private final ReversalRepository reversals;
     private final TransactionRepository transactionRepository;
     private final PostingRepository postings;
+    private final PaymentRepository payments;
+    private final RefundRepository refunds;
     private final TransactionService transactions;
     private final OutboxRecorder outbox;
     private final Clock clock;
 
     public ReversalService(ReversalRepository reversals, TransactionRepository transactionRepository,
-                           PostingRepository postings, TransactionService transactions,
+                           PostingRepository postings, PaymentRepository payments,
+                           RefundRepository refunds, TransactionService transactions,
                            OutboxRecorder outbox, Clock clock) {
         this.reversals = reversals;
         this.transactionRepository = transactionRepository;
         this.postings = postings;
+        this.payments = payments;
+        this.refunds = refunds;
         this.transactions = transactions;
         this.outbox = outbox;
         this.clock = clock;
@@ -63,6 +81,23 @@ public class ReversalService {
             throw new TransactionAlreadyReversedException(
                     transactionId, existing.getReversalTransactionId());
         });
+
+        // If this transaction settled a payment, the payment has to be brought
+        // along: reversing it gives the money back, and nothing else must be
+        // able to give it back a second time. Empty for a refund's or another
+        // reversal's transaction, which guard no payment.
+        //
+        // The lock is taken here, before any writing, and on the same row and in
+        // the same order as the refund path, so a refund and a reversal racing
+        // on one payment serialise instead of both succeeding.
+        Payment settled = payments.findByTransactionIdForUpdate(transactionId).orElse(null);
+        if (settled != null) {
+            long alreadyRefunded = refunds.totalRefundedMinorUnits(settled.getId());
+            if (alreadyRefunded > 0) {
+                throw new RefundedPaymentCannotBeReversedException(
+                        settled.getId(), transactionId, alreadyRefunded);
+            }
+        }
 
         List<Posting> originalPostings =
                 postings.findByTransactionIdOrderByTypeAscCreatedAtAsc(transactionId);
@@ -85,6 +120,12 @@ public class ReversalService {
 
         Reversal reversal = reversals.save(Reversal.create(
                 transactionId, posted.transaction().getId(), Instant.now(clock)));
+
+        // Same database transaction as the negating postings, so the payment
+        // cannot be left POSTED while its money has already gone back.
+        if (settled != null) {
+            settled.markReversed();
+        }
 
         // Keyed on the ORIGINAL transaction id, so a consumer watching that
         // transaction sees the reversal land on the same partition, after it.

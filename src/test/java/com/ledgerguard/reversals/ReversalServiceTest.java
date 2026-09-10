@@ -1,10 +1,12 @@
 package com.ledgerguard.reversals;
 
 import com.ledgerguard.outbox.OutboxRecorder;
+import com.ledgerguard.payments.PaymentRepository;
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.postings.Posting;
 import com.ledgerguard.postings.PostingRepository;
 import com.ledgerguard.postings.PostingType;
+import com.ledgerguard.refunds.RefundRepository;
 import com.ledgerguard.transactions.PostedTransaction;
 import com.ledgerguard.transactions.Transaction;
 import com.ledgerguard.transactions.TransactionNotFoundException;
@@ -42,13 +44,15 @@ class ReversalServiceTest {
     private final ReversalRepository reversals = mock(ReversalRepository.class);
     private final TransactionRepository transactionRepository = mock(TransactionRepository.class);
     private final PostingRepository postings = mock(PostingRepository.class);
+    private final PaymentRepository payments = mock(PaymentRepository.class);
+    private final RefundRepository refunds = mock(RefundRepository.class);
     private final TransactionService transactions = mock(TransactionService.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-02-01T09:00:00Z"), ZoneOffset.UTC);
 
     private final OutboxRecorder outbox = mock(OutboxRecorder.class);
 
     private final ReversalService service = new ReversalService(
-            reversals, transactionRepository, postings, transactions, outbox, clock);
+            reversals, transactionRepository, postings, payments, refunds, transactions, outbox, clock);
 
     private final UUID accountA = UUID.randomUUID();
     private final UUID accountB = UUID.randomUUID();

@@ -60,3 +60,7 @@ replay_pid*.log
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# jqwik records the last failing sample per property so it can be retried first.
+# Local run state, not shared history.
+.jqwik-database

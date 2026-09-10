@@ -59,6 +59,10 @@ public class RefundService {
         Payment payment = payments.findByIdForUpdate(paymentId)
                 .orElseThrow(() -> new PaymentNotFoundException(paymentId));
 
+        // POSTED is the only refundable state. REVERSED in particular is not:
+        // the reversal has already returned the whole amount, so refunding on
+        // top of it would return it twice. The reversal path marks the payment
+        // under the same row lock this method takes, so the two cannot race.
         if (payment.getStatus() != PaymentStatus.POSTED) {
             throw new IllegalArgumentException(
                     "payment %s is %s and cannot be refunded".formatted(paymentId, payment.getStatus()));

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ledgerguard.consumers.LedgerEventConsumer;
 import com.ledgerguard.payments.PaymentService;
 import com.ledgerguard.support.TestIdempotency;
+import com.ledgerguard.support.LedgerPostgres;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,7 +53,7 @@ class OutboxKafkaFlowIntegrationTest {
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> POSTGRES = LedgerPostgres.newContainer();
 
     @Container
     @ServiceConnection
@@ -162,27 +163,35 @@ class OutboxKafkaFlowIntegrationTest {
     void refundAndReversalProduceEvents() {
         UUID payer = createAccount("Event Payer");
         UUID payee = createAccount("Event Payee");
-        JsonNode payment = pay(payer, payee, "10.00");
-        UUID paymentId = UUID.fromString(payment.get("paymentId").asText());
-        UUID txn = UUID.fromString(payment.get("transaction").get("id").asText());
+
+        // Two payments, not one. A payment that has been refunded can no longer
+        // be reversed — reversing it as well would return more than was paid —
+        // so the reversal here gets its own untouched payment. This test is
+        // about each operation emitting its own event on its own topic, not
+        // about that particular sequence being legal.
+        JsonNode refunded = pay(payer, payee, "10.00");
+        UUID refundedPaymentId = UUID.fromString(refunded.get("paymentId").asText());
+
+        JsonNode reversed = pay(payer, payee, "10.00");
+        UUID reversedTxn = UUID.fromString(reversed.get("transaction").get("id").asText());
 
         assertThat(rest.postForEntity("/payments/{id}/refunds", Map.of("amount", "4.00"),
-                JsonNode.class, paymentId).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+                JsonNode.class, refundedPaymentId).getStatusCode()).isEqualTo(HttpStatus.CREATED);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         assertThat(rest.exchange("/transactions/{id}/reversals", HttpMethod.POST,
                 new HttpEntity<>(Map.of("description", "reversing"), headers),
-                JsonNode.class, txn).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+                JsonNode.class, reversedTxn).getStatusCode()).isEqualTo(HttpStatus.CREATED);
 
         assertThat(count("SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = ? AND event_type = ?",
-                paymentId, "PaymentRefunded")).isEqualTo(1);
+                refundedPaymentId, "PaymentRefunded")).isEqualTo(1);
         assertThat(count("SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = ? AND event_type = ?",
-                txn, "TransactionReversed")).isEqualTo(1);
+                reversedTxn, "TransactionReversed")).isEqualTo(1);
 
         assertThat(jdbc.queryForObject(
                 "SELECT topic FROM outbox_events WHERE aggregate_id = ? AND event_type = ?",
-                String.class, paymentId, "PaymentRefunded")).isEqualTo(Topics.REFUNDS);
+                String.class, refundedPaymentId, "PaymentRefunded")).isEqualTo(Topics.REFUNDS);
 
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
                 assertThat(count("SELECT COUNT(*) FROM outbox_events WHERE published_at IS NULL")).isZero());
