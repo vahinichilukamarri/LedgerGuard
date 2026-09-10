@@ -10,7 +10,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -210,6 +214,30 @@ class PaymentFlowIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(balanceMinorUnitsOf(payer)).isZero();
+    }
+
+    @Test
+    @DisplayName("an unparseable body returns this API error shape, not the framework default")
+    void malformedJsonBodyReturnsTheStandardErrorShape() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        // What a single-quoted JSON body degrades into under cmd.exe: truncated, unparseable.
+        HttpEntity<String> request = new HttpEntity<>("{\"name\":\"Alice", headers);
+
+        ResponseEntity<JsonNode> response =
+                rest.exchange("/accounts", HttpMethod.POST, request, JsonNode.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        JsonNode body = response.getBody();
+        assertThat(body.get("error").asText()).isEqualTo("malformed_request_body");
+        assertThat(body.get("message").asText()).contains("could not be parsed");
+        assertThat(body.get("details")).isNotEmpty();
+        assertThat(body.hasNonNull("timestamp")).isTrue();
+
+        // The framework default shape carries "path" and "status"; ours must not.
+        assertThat(body.has("path")).as("framework default error shape must not leak").isFalse();
+        assertThat(body.has("status")).as("framework default error shape must not leak").isFalse();
     }
 
     private JsonNode pay(UUID source, UUID destination, String amount) {

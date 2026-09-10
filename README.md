@@ -197,9 +197,14 @@ payment flow needs two accounts to exist before it can be exercised at all.
 
 | Status | When |
 |---|---|
-| `400` | Malformed request, unknown currency, amount finer than the currency minor unit, currency mismatch against the account. |
+| `400` | Unknown currency, amount finer than the currency minor unit, currency mismatch against the account, failed field validation. |
+| `400` | Body that is not parseable JSON — `error: "malformed_request_body"`, with the parser detail in `details`. Usually a shell quoting mistake; see the note in the demo section. |
 | `404` | Unknown account. |
 | `422` | Postings do not balance. |
+
+Every error uses the same shape — `error`, `message`, `details`, `timestamp` —
+including unparseable bodies, which would otherwise fall through to the
+framework default shape and come back looking nothing like the rest of the API.
 
 `POST /payments` cannot itself produce a 422, because it always constructs an
 equal-and-opposite pair. The 422 guards `TransactionService` against *any*

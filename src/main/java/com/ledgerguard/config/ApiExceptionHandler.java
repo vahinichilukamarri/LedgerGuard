@@ -4,6 +4,7 @@ import com.ledgerguard.accounts.AccountNotFoundException;
 import com.ledgerguard.transactions.UnbalancedTransactionException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -42,5 +43,33 @@ public class ApiExceptionHandler {
                 .toList();
         return ResponseEntity.badRequest()
                 .body(ApiError.of("validation_failed", "request body failed validation", details));
+    }
+
+    /**
+     * The body never parsed, so no controller method was reached and no bean
+     * validation ran. Without this, such a request falls through to the default
+     * error controller and comes back in a different shape from every other
+     * error this API returns, which makes it needlessly hard to debug.
+     *
+     * <p>Most often this is a shell quoting mistake: Windows {@code cmd.exe}
+     * does not treat single quotes as grouping, so a single-quoted JSON body
+     * arrives split across several arguments.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> handleUnreadableBody(HttpMessageNotReadableException e) {
+        return ResponseEntity.badRequest()
+                .body(ApiError.of(
+                        "malformed_request_body",
+                        "request body could not be parsed as JSON",
+                        List.of(firstLineOf(e.getMostSpecificCause().getMessage()))));
+    }
+
+    /** Jackson explains the parse failure across many lines; the first one carries the point. */
+    private static String firstLineOf(String message) {
+        if (message == null || message.isBlank()) {
+            return "no further detail available";
+        }
+        int newline = message.indexOf('\n');
+        return (newline < 0 ? message : message.substring(0, newline)).trim();
     }
 }
