@@ -1,0 +1,62 @@
+# --- Maven build output ---
+target/
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+release.properties
+pom.xml.versionsBackup
+dependency-reduced-pom.xml
+
+# --- IDE ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+nbproject/
+*.swp
+
+# --- Local environment / secrets ---
+# Never commit real credentials. The defaults in application.yml and
+# docker-compose.yml are local-dev-only and overridable via the
+# LEDGERGUARD_DB_* environment variables.
+.env
+.env.*
+!.env.example
+*.local
+application-local.yml
+application-local.properties
+application-secret*.yml
+application-secret*.properties
+src/main/resources/application-local.*
+secrets/
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+
+# --- Docker local state ---
+# The compose file uses a named volume (ledgerguard-pgdata) managed by Docker,
+# so no data lands in the repo. These guard against a future bind mount.
+docker-compose.override.yml
+pgdata/
+postgres-data/
+.docker/
+
+# --- Logs / runtime ---
+*.log
+logs/
+*.pid
+hs_err_pid*.log
+replay_pid*.log
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: ledgerguard
+
+  datasource:
+    url: ${LEDGERGUARD_DB_URL:jdbc:postgresql://localhost:5432/ledgerguard}
+    username: ${LEDGERGUARD_DB_USER:ledgerguard}
+    password: ${LEDGERGUARD_DB_PASSWORD:ledgerguard}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema. Hibernate only checks its mapping against it.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+
+server:
+  port: ${LEDGERGUARD_PORT:8080}
+
+logging:
+  level:
+    com.ledgerguard: INFO
