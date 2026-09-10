@@ -2,9 +2,16 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 1 — Ledger Core.** Double-entry accounts, payments,
-transactions and immutable postings, with balances derived from the postings
-ledger. Nothing beyond that scope is implemented yet.
+**Current phase: Phase 3 — Idempotency & Safe Retries.** Every write endpoint
+now requires an `Idempotency-Key`; retries replay instead of double-charging.
+
+| Phase | Tag | What it added |
+|---|---|---|
+| 1 — Ledger Core | `v0.1-ledger-core` | Double-entry accounts, payments, transactions and immutable postings, with balances derived from the postings ledger. |
+| 2 — Refunds, Reversals & Transaction Safety | `v0.2-transaction-safety` | Full and partial refunds, single-use reversals, and proven all-or-nothing writes. Both are new transactions, never edits. |
+| 3 — Idempotency & Safe Retries | `v0.3-idempotency` | Required idempotency keys, byte-identical replay, and exactly-one-effect under concurrent duplicates. |
+
+Nothing beyond those three phases is implemented. Kafka remains out of scope.
 
 ---
 
@@ -176,6 +183,148 @@ rollback left no broken state behind.
 
 ---
 
+## Idempotency (Phase 3)
+
+### The problem
+
+A client sends `POST /payments`. The connection drops before the response gets
+back. The client, correctly, retries.
+
+Phases 1 and 2 would create a second payment and move the money twice. Nothing
+in the ledger prevents it: both requests are individually valid, both produce
+balanced transactions, and the invariant holds perfectly while the customer is
+charged twice. **A consistent ledger and a correct one are not the same thing.**
+
+### The design
+
+Every write endpoint requires an `Idempotency-Key` header. The key plus a
+fingerprint of the request decides what happens:
+
+| Situation | Result |
+|---|---|
+| Key never seen | The work runs. Response stored against the key. |
+| Key seen, **same** request | The original response is replayed byte for byte, with `Idempotent-Replay: true`. |
+| Key seen, **different** request | **409** `idempotency_key_conflict`. Nothing runs. |
+| No key at all | **400** `idempotency_key_required`. |
+
+Keys are scoped per endpoint, so the same token on `/payments` and on a refund
+are unrelated.
+
+### Four decisions worth explaining
+
+**The header is required, not optional.** An optional guard leaves the failure
+mode in place for exactly the clients most likely to retry badly. Being pre-1.0
+made the breaking change cheap now and expensive later.
+
+**Conflict is 409, not 422.** Every 422 here means "the ledger refused this" —
+unbalanced postings, the refund cap, reverse-once. Key reuse is not a ledger
+rule; it is a request conflicting with existing state. Keeping 422 to mean one
+thing is worth protecting.
+
+**Replay is signalled in a header.** The guarantee is that the replayed body is
+*byte-identical*. A body field would break that by definition. Both paths return
+the very same stored string, so identity is structural rather than hoped-for.
+
+**The fingerprint is a hash of method + path + canonical body**, where canonical
+means object keys sorted recursively. Key order therefore cannot change it. One
+deliberate limitation: `"4.00"` and `"4.0"` fingerprint differently and so
+conflict. Treating them as equivalent means guessing at intent, and guessing
+wrong means honouring a genuinely different request under a used key.
+
+### How the concurrency guarantee actually works
+
+The idempotency row is inserted **and flushed before the handler runs**. That
+ordering is the whole design:
+
+1. Request A inserts the row and flushes. The INSERT is real but uncommitted.
+2. Request B, same key, attempts the same INSERT and **blocks** on
+   `idempotency_keys_unique`. B has not touched the ledger.
+3. A does its ledger writes, records its response on the row, commits.
+4. B unblocks, fails with a unique violation, rolls back having written
+   nothing, re-reads the committed row and replays A's exact response.
+
+If A rolls back instead, B's INSERT succeeds and B proceeds as the winner.
+Either way exactly one set of ledger writes commits: not two, and not zero.
+
+**Trade-off:** B holds its connection for as long as A's transaction takes.
+Fine here, where handlers finish in milliseconds. A long-running handler would
+want an explicit `IN_PROGRESS` row and an immediate 409 telling the client to
+retry shortly, rather than making it wait.
+
+The detection is deliberately narrow — only SQLState `23505` on
+`idempotency_keys_unique` counts as a lost race. Treating any integrity
+violation as "someone beat me" would mean replaying another request's response
+when the real problem was a ledger constraint.
+
+### Atomicity
+
+The key and the ledger writes commit together. A key recorded without its
+transaction would poison every future retry of a request that never happened;
+a transaction without its key would be silently un-deduplicated.
+`failedWriteLeavesNoKeyBehind` forces the handler to fail after the key row has
+been inserted and flushed, then asserts no key row survives — and proves it by
+successfully reusing that same key for a different request afterwards.
+
+### Retention
+
+`expires_at` is written and never read. Nothing sweeps expired keys yet. The
+column exists now because adding a retention column to an already-populated
+table later means backfilling every row; the sweeper belongs to a later phase.
+
+---
+
+## Evidence: 100 concurrent duplicate requests
+
+Measured against a real running instance on 2026-09-10, not estimated. Both
+runs fired 100 `curl` processes released together at `POST /payments` for
+$12.34.
+
+### Run 1 — 100 requests, one shared `Idempotency-Key`
+
+| Measurement | Result |
+|---|---|
+| HTTP responses | 100, all `201` |
+| **Distinct `paymentId`s returned** | **1** |
+| Responses carrying `Idempotent-Replay: true` | 99 |
+| `payments` rows created | 1 |
+| `idempotency_keys` rows created | 1 |
+| Money actually moved | **$12.34, once** |
+| Ledger drift | **$0.00** |
+
+99 of the 100 duplicates were prevented. One request did the work; the rest
+received its exact response.
+
+### Run 2 — 100 requests, 100 distinct keys, identical body
+
+| Measurement | Result |
+|---|---|
+| HTTP responses | 100, all `201` |
+| **Distinct `paymentId`s returned** | **100** |
+| Responses carrying `Idempotent-Replay: true` | 0 |
+| `payments` rows created | 100 |
+| Money actually moved | **$1,234.00** |
+| Ledger drift | **$0.00** |
+
+**What run 2 is, precisely.** It is not the Phase 2 code re-run — that code was
+not reintroduced, and no figure here is extrapolated from it. It is the current
+code with deduplication made inapplicable, because every request carries a
+different key. It measures what 100 un-deduplicated identical requests do, which
+is the shape of the bug Phase 3 exists to prevent. Read it as an upper bound on
+the damage, not as a replay of history.
+
+### The uncomfortable part
+
+**Ledger drift was $0.00 in both runs.** The Phase 1 invariant held perfectly
+while the customer was charged a hundred times. Every one of those 100 payments
+was internally balanced.
+
+That is the point worth keeping: `Σ debits = Σ credits` proves the ledger is
+*self-consistent*. It says nothing about whether the money should have moved at
+all. Duplicate suppression is a different guarantee, and it needed its own
+mechanism.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -240,9 +389,11 @@ To point at a different database instead, override the environment variables:
 
 ### 2. Migrations
 
-**Nothing to run by hand.** Flyway applies `db/migration/V1__init.sql`
-automatically at startup, creating `accounts`, `transactions`, `payments` and
-`postings` with their foreign keys, not-null and check constraints.
+**Nothing to run by hand.** Flyway applies every migration in `db/migration`
+automatically at startup: `V1__init.sql` creates `accounts`, `transactions`,
+`payments` and `postings`; `V2__refunds_and_reversals.sql` adds `refunds` and
+`reversals`; `V3__idempotency.sql` adds `idempotency_keys`. All of them arrive
+with their foreign keys, not-null and check constraints.
 
 Hibernate is set to `ddl-auto: validate`, so Flyway owns the schema outright and
 the app refuses to start if the JPA mappings and the migrated schema disagree.
@@ -267,10 +418,22 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-23 tests across three classes. `PaymentFlowIntegrationTest` starts its own
-throwaway PostgreSQL via Testcontainers and runs the real Flyway migrations
-against it — no in-memory database stand-in, because the schema constraints are
-part of the product.
+61 tests across eight classes:
+
+| Class | Tests | Covers |
+|---|---|---|
+| `TransactionServiceBalanceTest` | 11 | the Σ debits = Σ credits invariant, no database |
+| `PostingImmutabilityTest` | 7 | no mutation path onto a posting exists |
+| `PaymentFlowIntegrationTest` | 6 | payment → balance, end to end |
+| `RefundServiceTest` | 6 | the refund cap and posting direction |
+| `ReversalServiceTest` | 5 | reverse-once, and exactness of the negation |
+| `RefundReversalFlowIntegrationTest` | 6 | refund/reversal flows plus the atomicity proof |
+| `RequestFingerprintTest` | 10 | key-order independence, and what must change the fingerprint |
+| `IdempotencyFlowIntegrationTest` | 10 | replay, conflict, scoping, and the concurrency race |
+
+The integration tests start their own throwaway PostgreSQL via Testcontainers
+and run the real Flyway migrations against it — no in-memory database stand-in,
+because the schema constraints are part of the product.
 
 ---
 
@@ -284,6 +447,9 @@ part of the product.
 | `POST` | `/payments/{id}/refunds` | Refund all or part of a payment as a new, opposite transaction. |
 | `POST` | `/transactions/{id}/reversals` | Fully reverse a transaction, once. Body optional. |
 
+All three write endpoints (`/payments`, refunds, reversals) **require an
+`Idempotency-Key` header**. `POST /accounts` and the balance read do not.
+
 `POST /accounts` is not itself a Phase 1 deliverable; it exists because the
 payment flow needs two accounts to exist before it can be exercised at all.
 
@@ -293,16 +459,23 @@ payment flow needs two accounts to exist before it can be exercised at all.
 |---|---|
 | `400` | Unknown currency, amount finer than the currency minor unit, currency mismatch against the account, failed field validation. |
 | `400` | Body that is not parseable JSON — `error: "malformed_request_body"`, with the parser detail in `details`. Usually a shell quoting mistake; see the note in the demo section. |
-| `404` | Unknown account. |
-| `422` | Postings do not balance. |
+| `400` | Missing `Idempotency-Key` on a write endpoint (`idempotency_key_required`). |
+| `404` | Unknown account (`account_not_found`), payment (`payment_not_found`) or transaction (`transaction_not_found`). |
+| `409` | An idempotency key reused with a different request (`idempotency_key_conflict`). |
+| `422` | Postings do not balance (`unbalanced_transaction`). |
+| `422` | Refund would exceed what remains refundable (`refund_amount_exceeded`). |
+| `422` | Transaction has already been reversed (`transaction_already_reversed`). |
 
 Every error uses the same shape — `error`, `message`, `details`, `timestamp` —
 including unparseable bodies, which would otherwise fall through to the
 framework default shape and come back looking nothing like the rest of the API.
 
-`POST /payments` cannot itself produce a 422, because it always constructs an
-equal-and-opposite pair. The 422 guards `TransactionService` against *any*
-caller — including whatever Phase 2 adds — and is covered by
+The 422s share a character: the request was well formed, but committing it
+would have broken a ledger rule. The 409 is deliberately *not* one of them —
+reusing a key is a conflict with existing state, not a ledger refusal. `POST /payments` cannot itself produce the
+`unbalanced_transaction` one, because it always constructs an equal-and-opposite
+pair — that guard exists for *any* caller of `TransactionService`, including the
+refund and reversal paths added in Phase 2, and is covered by
 `TransactionServiceBalanceTest`.
 
 ---
@@ -340,6 +513,7 @@ Take the `id` from each response, then move $10.25 from Alice to Bob:
 ```bash
 curl -s -X POST http://localhost:8080/payments \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-payment-1" \
   -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"10.25","currency":"USD","description":"invoice 42"}'
 ```
 
@@ -361,16 +535,98 @@ Alice reads `balanceMinorUnits: -1025`, Bob reads `1025`.
 A sub-cent amount is refused rather than rounded (**400**):
 
 ```bash
-curl -s -X POST http://localhost:8080/payments -H "Content-Type: application/json" -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"10.255","currency":"USD"}'
+curl -s -X POST http://localhost:8080/payments -H "Content-Type: application/json" -H "Idempotency-Key: demo-subcent" -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"10.255","currency":"USD"}'
 ```
 
 A currency the account is not denominated in is refused (**400**):
 
 ```bash
-curl -s -X POST http://localhost:8080/payments -H "Content-Type: application/json" -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"5.00","currency":"EUR"}'
+curl -s -X POST http://localhost:8080/payments -H "Content-Type: application/json" -H "Idempotency-Key: demo-wrong-currency" -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"5.00","currency":"EUR"}'
 ```
 
 An unknown account is a **404**. After any of these, the balances are unchanged.
+
+### Refunds
+
+Capture the payment id and its transaction id from the `POST /payments`
+response, then refund part of it:
+
+```bash
+curl -s -X POST http://localhost:8080/payments/<PAYMENT_ID>/refunds \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-refund-1" \
+  -d '{"amount":"4.00","description":"partial refund"}'
+```
+
+The response reports `refundedTotalMinorUnits: 400` and
+`remainingRefundableMinorUnits: 625`, and carries a **new** transaction whose
+postings are the payment's reversed — a DEBIT back to the payer, a CREDIT off
+the payee. Balances move to `-625` and `625`.
+
+Asking for more than remains is refused with **422 `refund_amount_exceeded`**,
+and nothing changes:
+
+```bash
+curl -s -w "\nHTTP %{http_code}\n" -X POST http://localhost:8080/payments/<PAYMENT_ID>/refunds -H "Content-Type: application/json" -H "Idempotency-Key: demo-over-refund" -d '{"amount":"6.26"}'
+```
+
+### Reversals
+
+A reversal takes no amount — it always negates the whole transaction. The body
+is optional:
+
+```bash
+curl -s -X POST http://localhost:8080/transactions/<TRANSACTION_ID>/reversals \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-reversal-1" \
+  -d '{"description":"reversing invoice 42"}'
+```
+
+Reversing the same transaction twice is refused with
+**422 `transaction_already_reversed`**, naming the transaction that already did
+it:
+
+```bash
+curl -s -w "\nHTTP %{http_code}\n" -X POST http://localhost:8080/transactions/<TRANSACTION_ID>/reversals -H "Content-Type: application/json" -H "Idempotency-Key: demo-reversal-2" -d '{}'
+```
+
+To confirm the original was never edited — this prints `2|0`, two postings still
+netting to zero:
+
+```bash
+docker exec ledgerguard-postgres psql -U ledgerguard -d ledgerguard -tAc "SELECT COUNT(*), COALESCE(SUM(CASE WHEN type='DEBIT' THEN amount_minor ELSE -amount_minor END),0) FROM postings WHERE transaction_id='<TRANSACTION_ID>';"
+```
+
+### Idempotency
+
+Every write above carries an `Idempotency-Key`. Retry one verbatim — same key,
+same body — and the original response comes back unchanged:
+
+```bash
+curl -s -D - -o /dev/null -X POST http://localhost:8080/payments -H "Content-Type: application/json" -H "Idempotency-Key: demo-payment-1" -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"10.25","currency":"USD","description":"invoice 42"}'
+```
+
+The response headers include `Idempotent-Replay: true`, and no second payment
+exists. Reuse that key with a *different* body and it is refused with **409**:
+
+```bash
+curl -s -w "\nHTTP %{http_code}\n" -X POST http://localhost:8080/payments -H "Content-Type: application/json" -H "Idempotency-Key: demo-payment-1" -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"99.99","currency":"USD"}'
+```
+
+Omit the header entirely and it is a **400**:
+
+```bash
+curl -s -w "\nHTTP %{http_code}\n" -X POST http://localhost:8080/payments -H "Content-Type: application/json" -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"1.00","currency":"USD"}'
+```
+
+To see the concurrency guarantee, fire 100 at once with one shared key and count
+what actually happened:
+
+```bash
+KEY="race-$(date +%s)"; for i in $(seq 1 100); do curl -s -o /dev/null -X POST http://localhost:8080/payments -H "Content-Type: application/json" -H "Idempotency-Key: $KEY" -d '{"sourceAccountId":"<ALICE_ID>","destinationAccountId":"<BOB_ID>","amount":"12.34","currency":"USD"}' & done; wait; docker exec ledgerguard-postgres psql -U ledgerguard -d ledgerguard -tAc "SELECT COUNT(*) FROM idempotency_keys WHERE idempotency_key='$KEY';"
+```
+
+That prints `1`.
 
 ### Ledger-wide check
 
@@ -395,6 +651,10 @@ V2 ── refunds      (id, payment_id, transaction_id UNIQUE,
                     amount_minor, currency, created_at)
       reversals    (id, original_transaction_id UNIQUE,
                     reversal_transaction_id UNIQUE, created_at)
+
+V3 ── idempotency_keys (id, idempotency_key, endpoint, request_fingerprint,
+                    response_status, response_body, created_at, expires_at,
+                    UNIQUE (endpoint, idempotency_key))
 ```
 
 `postings.currency` is carried per posting rather than inherited from the
@@ -409,6 +669,9 @@ money that moves — money still moves only through postings.
 
 ## Not in this phase
 
-Idempotency handling and Kafka are explicitly out of scope for Phase 2 and are
-not implemented. Refunds and reversals, which were out of scope for Phase 1,
-landed in Phase 2 and are documented above.
+Kafka and event streaming are explicitly out of scope for Phase 3 and are not
+implemented. Nothing sweeps expired idempotency keys yet either; `expires_at`
+is written but never read.
+
+Refunds and reversals landed in Phase 2, and idempotency in Phase 3. Both are
+documented above.

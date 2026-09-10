@@ -3,6 +3,8 @@ package com.ledgerguard.refunds;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.ledgerguard.postings.Posting;
 import com.ledgerguard.postings.PostingRepository;
+import com.ledgerguard.support.TestIdempotency;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,6 +63,12 @@ class RefundReversalFlowIntegrationTest {
      */
     @MockitoSpyBean
     private RefundRepository refundRepositorySpy;
+
+    @BeforeEach
+    void attachIdempotencyKeys() {
+        // Every POST below is a distinct request, so each gets a fresh key.
+        TestIdempotency.autoKey(rest);
+    }
 
     // ---------- helpers ----------
 

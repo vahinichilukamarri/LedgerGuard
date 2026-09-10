@@ -1,6 +1,8 @@
 package com.ledgerguard.config;
 
 import com.ledgerguard.accounts.AccountNotFoundException;
+import com.ledgerguard.idempotency.IdempotencyKeyConflictException;
+import com.ledgerguard.idempotency.IdempotencyKeyRequiredException;
 import com.ledgerguard.payments.PaymentNotFoundException;
 import com.ledgerguard.refunds.RefundAmountExceededException;
 import com.ledgerguard.reversals.TransactionAlreadyReversedException;
@@ -60,6 +62,23 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiError> handleAlreadyReversed(TransactionAlreadyReversedException e) {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                 .body(ApiError.of("transaction_already_reversed", e.getMessage()));
+    }
+
+    @ExceptionHandler(IdempotencyKeyRequiredException.class)
+    public ResponseEntity<ApiError> handleIdempotencyKeyRequired(IdempotencyKeyRequiredException e) {
+        return ResponseEntity.badRequest()
+                .body(ApiError.of("idempotency_key_required", e.getMessage()));
+    }
+
+    /**
+     * 409, not 422. The 422s here all mean "the ledger refused this". Reusing a
+     * key for a different request is not a ledger rule but a conflict with
+     * state that already exists, which is what 409 is for.
+     */
+    @ExceptionHandler(IdempotencyKeyConflictException.class)
+    public ResponseEntity<ApiError> handleIdempotencyConflict(IdempotencyKeyConflictException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of("idempotency_key_conflict", e.getMessage()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

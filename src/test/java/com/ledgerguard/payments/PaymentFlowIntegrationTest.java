@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.ledgerguard.postings.Posting;
 import com.ledgerguard.postings.PostingRepository;
 import jakarta.persistence.EntityManager;
+import com.ledgerguard.support.TestIdempotency;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,6 +60,12 @@ class PaymentFlowIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @BeforeEach
+    void attachIdempotencyKeys() {
+        // Every POST below is a distinct request, so each gets a fresh key.
+        TestIdempotency.autoKey(rest);
+    }
 
     private UUID createAccount(String name, String currency) {
         ResponseEntity<JsonNode> response = rest.postForEntity(
