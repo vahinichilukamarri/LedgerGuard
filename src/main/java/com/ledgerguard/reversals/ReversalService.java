@@ -88,10 +88,19 @@ public class ReversalService {
 
         // Keyed on the ORIGINAL transaction id, so a consumer watching that
         // transaction sees the reversal land on the same partition, after it.
+        // Gross amount moved by the reversal: the sum of its debit legs. Carried
+        // on the event so a consumer never has to call back to learn how much
+        // was reversed, same rule as every other payload here.
+        long reversedAmountMinor = negated.stream()
+                .filter(leg -> leg.type() == com.ledgerguard.postings.PostingType.DEBIT)
+                .mapToLong(NewPosting::amountMinor)
+                .sum();
+
         outbox.record(EventType.TRANSACTION_REVERSED, transactionId, Map.of(
                 "reversalId", reversal.getId().toString(),
                 "originalTransactionId", transactionId.toString(),
                 "reversalTransactionId", posted.transaction().getId().toString(),
+                "amountMinor", reversedAmountMinor,
                 "currency", original.getCurrency()));
 
         return ReversalResponse.of(reversal, posted);

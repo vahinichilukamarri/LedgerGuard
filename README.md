@@ -2,9 +2,9 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 4 — Transactional Outbox + Kafka.** Ledger events are
-written in the same transaction as the money, then published to Kafka after
-commit. A broker outage cannot lose an event or block a payment.
+**Current phase: Phase 5 — Settlement Simulator + Reconciliation.** The ledger
+is now checked against an independent external record, because being
+self-consistent and being correct are not the same thing.
 
 | Phase | Tag | What it added |
 |---|---|---|
@@ -12,8 +12,9 @@ commit. A broker outage cannot lose an event or block a payment.
 | 2 — Refunds, Reversals & Transaction Safety | `v0.2-transaction-safety` | Full and partial refunds, single-use reversals, and proven all-or-nothing writes. Both are new transactions, never edits. |
 | 3 — Idempotency & Safe Retries | `v0.3-idempotency` | Required idempotency keys, byte-identical replay, and exactly-one-effect under concurrent duplicates. |
 | 4 — Transactional Outbox + Kafka | `v0.4-kafka-outbox` | Events written with the ledger transaction, published after commit, at-least-once with consumer-side deduplication. |
+| 5 — Settlement Simulator & Reconciliation | `v0.5-reconciliation` | An independent external settlement source, six discrepancy classifications, and persisted incidents with evidence linkage. |
 
-Nothing beyond those four phases is implemented.
+Nothing beyond those five phases is implemented.
 
 ---
 
@@ -546,6 +547,270 @@ The `psql` commands above are unaffected because they pass no absolute paths.
 
 ---
 
+## Reconciliation (Phase 5)
+
+### What this catches that the ledger invariant cannot
+
+Phases 1 to 4 prove the ledger agrees **with itself**. Debits equal credits, no
+transaction is half-written, no retry double-charges, no event is lost. None of
+that says the ledger agrees with **anyone else**.
+
+Every one of these is internally perfect and externally wrong:
+
+- We recorded a $250 payment; the processor settled $200.
+- We recorded a payment; the processor has no record of it.
+- The processor settled the same payment twice.
+- Money moved at the processor that our ledger has never heard of.
+
+Phase 3 already showed this shape: 100 duplicate payments, every one balanced,
+ledger drift $0.00, and the customer charged a hundred times. **Internal
+consistency is necessary and nowhere near sufficient.** Reconciliation is how
+the second kind of wrongness gets found.
+
+### The six outcomes
+
+Every comparison lands in exactly one.
+
+| Outcome | One-line example | Base severity |
+|---|---|---|
+| `MATCHED` | We say $250, they say $250, both settled. | no incident |
+| `MISSING_SETTLEMENT` | We posted $250; the settlement file has nothing. | MEDIUM |
+| `AMOUNT_MISMATCH` | We recorded **$250**, they settled **$200**. | MEDIUM |
+| `DUPLICATE_SETTLEMENT` | One payment, two settlement records. | HIGH |
+| `STATUS_MISMATCH` | Both say $250; we say POSTED, they say FAILED. | LOW |
+| `UNEXPECTED_EXTERNAL_TRANSACTION` | They settled $99 against a reference we do not have. | HIGH |
+
+When both the amount **and** the status differ, it is classified
+`AMOUNT_MISMATCH`. Exactly one classification is allowed and the money is the
+more actionable fact; the status is still stored on the incident as evidence.
+A differing **currency** is also an `AMOUNT_MISMATCH` — the amounts are not
+comparable, so they do not agree.
+
+### The matching key
+
+An external record is paired to an internal transaction by
+**`external_reference == transaction_id`** — the processor's echo of our own
+reference, which is how real settlement files correlate.
+
+Ambiguity in that key is not an edge case to defend against; it *is* three of
+the six outcomes:
+
+| Key situation | Outcome |
+|---|---|
+| exactly one external record | compare amount, currency, status |
+| no external record | `MISSING_SETTLEMENT` |
+| two or more with the same reference | `DUPLICATE_SETTLEMENT` |
+| reference is blank, or names a transaction we do not have | `UNEXPECTED_EXTERNAL_TRANSACTION` |
+
+A blank reference is deliberately treated as unmatched rather than skipped.
+Dropping it would mean silently ignoring a real movement of money.
+
+**The grace window.** The simulator consumes events asynchronously, so a
+transaction committed a second ago legitimately has no settlement record yet.
+Reporting that as `MISSING_SETTLEMENT` would be noise. Transactions younger than
+`ledgerguard.reconciliation.grace-seconds` (default 5) are counted as *awaiting
+settlement* — neither matched nor a discrepancy. Real reconciliation runs T+1
+for the same reason; this is that idea compressed to seconds.
+
+### Severity: type sets the floor, amount escalates
+
+| | |
+|---|---|
+| Base | from the discrepancy type, per the table above |
+| ≥ **$100** in question | escalate to at least `HIGH` |
+| ≥ **$1,000** in question | escalate to `CRITICAL` |
+| Escalation | only ever raises, never lowers |
+
+The reasoning: **type** tells you how uncontrolled the money is, **amount**
+tells you the exposure. A one-cent mismatch and a ten-thousand-dollar mismatch
+are the same bug shape but not the same alert. Conversely a duplicate
+settlement of one cent stays `HIGH`, because the number is not the point —
+a control failed and nothing stopped it.
+
+What counts as "in question" differs sensibly by type: the whole amount for a
+missing settlement, the difference for an amount mismatch, and only the **extra
+copies** for a duplicate, since one of them was supposed to happen.
+
+**A zero-difference status mismatch is still flagged**, at `LOW`. Agreeing
+amounts are exactly what makes it easy to overlook, and "we think it settled,
+they think it failed" is usually the precursor to a real loss rather than a
+harmless annotation.
+
+### One standing problem is one incident
+
+A discrepancy nobody has resolved is still there on the next run. Filing it
+again each time would turn one standing problem into a stream of alerts, so a
+run **skips any discrepancy that already has an OPEN incident** for the same
+type and the same pair of records. The run still reports it: `discrepancies` is
+how many were found, `newIncidents` how many were filed, and `alreadyOpen` the
+difference.
+
+Resolving an incident releases the key, so if the disagreement is still there on
+a later run it is raised again — which is right, because nobody is looking at it
+any more.
+
+### MATCHED creates no incident
+
+Incidents are exceptions that need action. A row per agreement would bury the
+handful that matter. Agreement is recorded as a **count** on the
+`reconciliation_runs` row instead, so a run can report that it examined 400
+transactions and agreed on 397 without turning the incident table into a log.
+
+### Why the simulator consumes Kafka instead of reading the ledger
+
+This is the decision the whole phase rests on. If `SettlementSimulator` queried
+`transactions` and copied the amounts, reconciliation would compare the ledger
+against a mirror of itself and pass by construction. **A comparison that cannot
+fail is not a comparison.**
+
+So it consumes the published event stream and nothing else — exactly what a real
+processor receives: an instruction, arriving asynchronously, applied under its
+own rules and stored in its own table. It runs in its own consumer group and has
+no access to `transactions` or `postings`.
+
+Two consequences worth noting:
+
+- **`settlement_records` is mutable.** Every other money-bearing table here is
+  append-only because we own it. We do not own the processor: it restates
+  amounts, moves statuses and withdraws records. Modelling that faithfully is
+  what makes reconciliation worth running, and it is why the fault endpoint
+  edits those rows rather than the ledger.
+- **The simulator deduplicates on event id.** Delivery is at-least-once, and a
+  settlement record created by a *redelivery* would surface as a
+  `DUPLICATE_SETTLEMENT` incident describing a bug in the simulator rather than
+  anything about the ledger.
+
+### On demand, not scheduled
+
+Reconciliation runs when you call `POST /reconciliation/runs`. Three reasons:
+you almost always want to run it and read the result in the same breath; a
+scheduled version makes tests wait on wall-clock timing and hides *when* a run
+happened; and real reconciliation is a batch job, which is closer to "triggered"
+than to "continuous". `@EnableScheduling` is already on from Phase 4, so a
+nightly trigger is one annotation away — deliberately not taken.
+
+---
+
+## Demo: produce each discrepancy yourself
+
+Every command is Git Bash. Start with `docker compose up -d` and
+`mvn spring-boot:run`, both healthy.
+
+### Helpers
+
+Paste these once; the rest of the section uses them.
+
+```bash
+API=http://localhost:8080
+mk() { curl -s -X POST $API/accounts -H "Content-Type: application/json" -d "{\"name\":\"$1\",\"currency\":\"USD\"}" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'; }
+pay() { A=$(mk "$1 Payer"); B=$(mk "$1 Payee"); curl -s -X POST $API/payments -H "Content-Type: application/json" -H "Idempotency-Key: demo-$1-$(date +%s%N)" -d "{\"sourceAccountId\":\"$A\",\"destinationAccountId\":\"$B\",\"amount\":\"$2\",\"currency\":\"USD\",\"description\":\"$1\"}" | sed -n 's/.*"transaction":{"id":"\([^"]*\)".*/\1/p'; }
+fault() { curl -s -X POST $API/admin/settlement/faults -H "Content-Type: application/json" -d "$1"; echo; }
+recon() { curl -s -X POST $API/reconciliation/runs | sed -n 's/.*"matched":\([0-9]*\),"awaitingSettlement":\([0-9]*\),"discrepancies":\([0-9]*\),"newIncidents":\([0-9]*\),"alreadyOpen":\([0-9]*\).*/  matched=\1 awaiting=\2 found=\3 new=\4 alreadyOpen=\5/p'; }
+show() { curl -s "$API/reconciliation/incidents?transactionId=$1"; echo; }
+```
+
+**Two waits matter here, and getting either wrong makes a demo look broken.**
+
+1. The simulator settles asynchronously, so a fault injected too early fails
+   with a 400 telling you so.
+2. Reconciliation ignores transactions younger than the **5 second grace
+   window** (`ledgerguard.reconciliation.grace-seconds`). Run it too soon and a
+   genuine `MISSING_SETTLEMENT` is reported as *awaiting settlement* instead —
+   correctly, but not what you were trying to see.
+
+`sleep 7` below clears both. The `recon` helper prints the run summary, so if a
+discrepancy you expected does not appear, `awaiting=` tells you immediately that
+you simply ran too early rather than that anything is wrong.
+
+To check the external side has caught up:
+
+```bash
+curl -s "$API/admin/settlement/records?transactionId=$TXN"
+```
+
+### 1. MATCHED — no incident
+
+```bash
+TXN=$(pay Matched 10.25); echo $TXN; sleep 7; recon; show $TXN
+```
+
+Returns `[]`. Agreement shows up in the run's `matched` count, not as a row.
+
+### 2. MISSING_SETTLEMENT — the processor loses it
+
+```bash
+TXN=$(pay Missing 10.25); sleep 7; fault "{\"type\":\"DROP_SETTLEMENT\",\"transactionId\":\"$TXN\"}"; recon; show $TXN
+```
+
+`MISSING_SETTLEMENT`, `MEDIUM`, difference `1025`, `settlementRecordId: null` —
+there is no external side to point at.
+
+### 3. AMOUNT_MISMATCH — $250 recorded, $200 settled
+
+```bash
+TXN=$(pay Amount 250.00); sleep 7; fault "{\"type\":\"RESTATE_AMOUNT\",\"transactionId\":\"$TXN\",\"amountDeltaMinor\":-5000}"; recon; show $TXN
+```
+
+`AMOUNT_MISMATCH`, `MEDIUM`, internal `25000`, external `20000`, difference
+`5000`. Push the delta past `-10000` and the same fault comes back `HIGH`.
+
+### 4. DUPLICATE_SETTLEMENT — settled twice
+
+```bash
+TXN=$(pay Dup 10.25); sleep 7; fault "{\"type\":\"DUPLICATE_SETTLEMENT\",\"transactionId\":\"$TXN\"}"; recon; show $TXN
+```
+
+`DUPLICATE_SETTLEMENT`, `HIGH` despite being only $10.25, difference `1025` —
+the extra copy, not the whole amount.
+
+### 5. STATUS_MISMATCH — amounts agree, states do not
+
+```bash
+TXN=$(pay Status 10.25); sleep 7; fault "{\"type\":\"CHANGE_STATUS\",\"transactionId\":\"$TXN\",\"newStatus\":\"FAILED\"}"; recon; show $TXN
+```
+
+`STATUS_MISMATCH`, `LOW`, difference **`0`**, `POSTED` vs `FAILED`. Flagged
+precisely because nothing about the numbers looks wrong.
+
+### 6. UNEXPECTED_EXTERNAL_TRANSACTION — money we never authorised
+
+Needs no payment; it references nothing by definition.
+
+```bash
+fault '{"type":"PHANTOM_SETTLEMENT","amountMinor":9900,"currency":"USD"}'; recon; curl -s "$API/reconciliation/incidents?type=UNEXPECTED_EXTERNAL_TRANSACTION"; echo
+```
+
+`UNEXPECTED_EXTERNAL_TRANSACTION`, `HIGH`, external `9900`,
+`transactionId: null` — no internal side exists.
+
+### Triage and resolve
+
+```bash
+curl -s "$API/reconciliation/incidents?severity=HIGH&status=OPEN"; echo
+```
+
+```bash
+curl -s -X POST $API/reconciliation/incidents/<INCIDENT_ID>/resolve; echo
+```
+
+Resolved incidents are kept, not deleted: what went wrong is itself a record.
+
+### Measured run
+
+All six executed against a running instance on 2026-09-10, each after a
+`sleep 7` so the grace window had passed:
+
+```
+MATCHED                          no incident created
+MISSING_SETTLEMENT               MEDIUM   difference 1025   external side null
+AMOUNT_MISMATCH                  MEDIUM   difference 5000   25000 vs 20000
+DUPLICATE_SETTLEMENT             HIGH     difference 1025   two external records
+STATUS_MISMATCH                  LOW      difference 0      POSTED vs FAILED
+UNEXPECTED_EXTERNAL_TRANSACTION  HIGH     external 9900     internal side null
+```
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -626,8 +891,10 @@ To point at a different database instead, override the environment variables:
 automatically at startup: `V1__init.sql` creates `accounts`, `transactions`,
 `payments` and `postings`; `V2__refunds_and_reversals.sql` adds `refunds` and
 `reversals`; `V3__idempotency.sql` adds `idempotency_keys`;
-`V4__outbox.sql` adds `outbox_events` and `processed_events`. All of them
-arrive with their foreign keys, not-null and check constraints.
+`V4__outbox.sql` adds `outbox_events` and `processed_events`;
+`V5__reconciliation.sql` adds `settlement_records`, `reconciliation_runs` and
+`reconciliation_incidents`. All of them arrive with their foreign keys,
+not-null and check constraints.
 
 Hibernate is set to `ddl-auto: validate`, so Flyway owns the schema outright and
 the app refuses to start if the JPA mappings and the migrated schema disagree.
@@ -652,7 +919,7 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-74 tests across ten classes:
+104 tests across twelve classes:
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -666,6 +933,8 @@ mvn test
 | `IdempotencyFlowIntegrationTest` | 10 | replay, conflict, scoping, and the concurrency race |
 | `OutboxRecorderTest` | 7 | envelope shape, stable event ids, integer amounts on the wire |
 | `OutboxKafkaFlowIntegrationTest` | 6 | publish, consume once, redelivery, and outbox atomicity |
+| `ReconcilerTest` | 21 | all six classifications, their edge cases, and the severity scheme |
+| `ReconciliationFlowIntegrationTest` | 9 | each discrepancy injected end to end, evidence linkage, and run-to-run dedupe |
 
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
@@ -690,9 +959,17 @@ are KRaft; the difference is only in how the port is negotiated.
 | `POST` | `/payments` | Payment → transaction → balanced DEBIT/CREDIT pair. Returns the transaction with its postings. |
 | `POST` | `/payments/{id}/refunds` | Refund all or part of a payment as a new, opposite transaction. |
 | `POST` | `/transactions/{id}/reversals` | Fully reverse a transaction, once. Body optional. |
+| `POST` | `/reconciliation/runs` | Run a reconciliation pass now and return what it found. |
+| `GET` | `/reconciliation/incidents` | Filter incidents by `type`, `severity`, `status`, `transactionId`. |
+| `POST` | `/reconciliation/incidents/{id}/resolve` | Mark an incident resolved. |
+| `POST` | `/admin/settlement/faults` | Make the simulated processor misbehave, for demos. |
+| `GET` | `/admin/settlement/records` | Inspect what the external world currently believes. |
 
-All three write endpoints (`/payments`, refunds, reversals) **require an
-`Idempotency-Key` header**. `POST /accounts` and the balance read do not.
+The three money-moving write endpoints (`/payments`, refunds, reversals)
+**require an `Idempotency-Key` header**. `POST /accounts`, the balance read,
+and the Phase 5 reconciliation and admin endpoints do not: none of them move
+money, so running one twice reports the same facts twice rather than paying
+twice.
 
 `POST /accounts` is not itself a Phase 1 deliverable; it exists because the
 payment flow needs two accounts to exist before it can be exercised at all.
@@ -904,7 +1181,20 @@ V4 ── outbox_events    (id, aggregate_type, aggregate_id, event_type, topic,
                     payload, occurred_at, published_at, publish_attempts)
       processed_events (consumer_name, event_id, processed_at,
                     PRIMARY KEY (consumer_name, event_id))
+
+V5 ── settlement_records         (id, external_id UNIQUE, external_reference,
+                    amount_minor, currency, status, settled_at, created_at)
+      reconciliation_runs        (id, started_at, completed_at, internal_examined,
+                    external_examined, matched, discrepancies)
+      reconciliation_incidents   (id, run_id FK, discrepancy_type, severity, status,
+                    transaction_id, settlement_record_id, internal_amount_minor,
+                    external_amount_minor, difference_minor, currency,
+                    internal_status, external_status, detail, created_at, resolved_at)
 ```
+
+`settlement_records` is the one money-bearing table here that is **mutable**,
+and deliberately so: it models a system we do not own. Everything under the
+ledger stays append-only.
 
 `postings.currency` is carried per posting rather than inherited from the
 transaction, because the invariant is stated per currency and the balance
@@ -918,8 +1208,8 @@ money that moves — money still moves only through postings.
 
 ## Not in this phase
 
-Settlement, reconciliation and anything ML-shaped are out of scope for Phase 4
-and are not implemented.
+Property-based testing, ChaosLab and anything ML-shaped are out of scope for
+Phase 5 and are not implemented.
 
 Two pieces of deliberate debt, both documented where they live:
 
@@ -927,6 +1217,9 @@ Two pieces of deliberate debt, both documented where they live:
   read, so `idempotency_keys` grows without bound.
 - Nothing prunes published outbox rows either. `outbox_events` keeps every
   event forever, which is useful for auditing and unsustainable for storage.
+- `reconciliation_runs` and `reconciliation_incidents` grow without bound too,
+  and every run re-examines the entire ledger rather than a window since the
+  last one. Fine at demo scale, wrong at real scale.
 
 Both need a retention job, which is a phase of its own rather than something
 to bolt on here.
