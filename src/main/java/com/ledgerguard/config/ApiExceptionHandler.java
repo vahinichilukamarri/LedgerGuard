@@ -1,6 +1,10 @@
 package com.ledgerguard.config;
 
 import com.ledgerguard.accounts.AccountNotFoundException;
+import com.ledgerguard.payments.PaymentNotFoundException;
+import com.ledgerguard.refunds.RefundAmountExceededException;
+import com.ledgerguard.reversals.TransactionAlreadyReversedException;
+import com.ledgerguard.transactions.TransactionNotFoundException;
 import com.ledgerguard.transactions.UnbalancedTransactionException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +24,18 @@ public class ApiExceptionHandler {
                 .body(ApiError.of("account_not_found", e.getMessage()));
     }
 
+    @ExceptionHandler(PaymentNotFoundException.class)
+    public ResponseEntity<ApiError> handlePaymentNotFound(PaymentNotFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiError.of("payment_not_found", e.getMessage()));
+    }
+
+    @ExceptionHandler(TransactionNotFoundException.class)
+    public ResponseEntity<ApiError> handleTransactionNotFound(TransactionNotFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiError.of("transaction_not_found", e.getMessage()));
+    }
+
     /**
      * 422 rather than 400: the request was well formed, but committing it would
      * have broken the ledger invariant.
@@ -28,6 +44,22 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiError> handleUnbalanced(UnbalancedTransactionException e) {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                 .body(ApiError.of("unbalanced_transaction", e.getMessage()));
+    }
+
+    /**
+     * 422 for the same reason: a syntactically fine request that the ledger
+     * refuses because it would refund more than was ever paid.
+     */
+    @ExceptionHandler(RefundAmountExceededException.class)
+    public ResponseEntity<ApiError> handleRefundExceeded(RefundAmountExceededException e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(ApiError.of("refund_amount_exceeded", e.getMessage()));
+    }
+
+    @ExceptionHandler(TransactionAlreadyReversedException.class)
+    public ResponseEntity<ApiError> handleAlreadyReversed(TransactionAlreadyReversedException e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(ApiError.of("transaction_already_reversed", e.getMessage()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

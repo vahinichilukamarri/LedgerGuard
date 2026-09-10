@@ -84,6 +84,98 @@ produced it — which is the entire point of keeping a ledger.
 
 ---
 
+## Refunds and reversals (Phase 2)
+
+### Neither one edits anything
+
+Both are **corrections written forwards**. Nothing in either flow modifies an
+existing row — they add new transactions whose postings move money the other
+way. This is not a policy either service chooses to follow: postings are
+physically unmodifiable (no setters, `updatable = false`, no repository write
+path), so a refund *could not* edit the original even if it tried.
+
+The practical consequence is that the ledger keeps the whole story. After a
+refund you can still see what was originally paid, when, and what was given
+back. An implementation that edited the original amount down would silently
+destroy that.
+
+### How they differ
+
+| | Refund | Reversal |
+|---|---|---|
+| **Scope** | A payment | Any transaction |
+| **Amount** | Full or partial | Always the whole thing |
+| **How many** | Many per payment, up to the amount paid | Exactly one, ever |
+| **Endpoint** | `POST /payments/{id}/refunds` | `POST /transactions/{id}/reversals` |
+| **Builds legs from** | The payment's source and destination | Reading back the original postings, whatever they are |
+| **Limit enforced by** | `RefundService` + a row lock | A UNIQUE constraint in the database |
+
+A **refund** is a business event: a customer gets some money back, possibly in
+instalments. It knows there is a payer and a payee, so it can refund part of
+the amount and do so repeatedly, up to the total paid.
+
+A **reversal** is a correction: this transaction should not have happened.
+It makes no assumption about shape — it reads whatever postings the original
+has, however many legs and in whatever currencies, and emits the opposite of
+each. Because the original balanced, its exact negation balances too. It still
+goes through `TransactionService.createBalanced`, so the check runs rather than
+being assumed.
+
+### The refund cap, and the race it hides
+
+The rule is `sum(refunds.amount_minor) ≤ payments.amount_minor`. That spans
+multiple rows, and a `CHECK` constraint can only see the row being written —
+the same reason `Σ debits = Σ credits` lives in `TransactionService` rather
+than in the schema.
+
+Being service-layer only creates a genuine hazard: two refunds arriving at once
+could both read the same remaining balance, both find it sufficient, and both
+commit. `RefundService` therefore loads the payment with
+`PaymentRepository.findByIdForUpdate`, taking a `PESSIMISTIC_WRITE` lock on the
+row for the rest of the transaction. Refunds against the *same* payment
+serialise; refunds against different payments are unaffected.
+
+Reversals need no such lock: `reversals.original_transaction_id` is `UNIQUE`,
+so a second concurrent reversal simply fails to insert.
+
+### The cumulative refunded amount is derived
+
+There is no `refunded_total` column on `payments`. The figure is
+`SUM(amount_minor)` over the payment's refund rows, computed when asked —
+consistent with how account balances work in Phase 1, and for the same reason.
+
+---
+
+## Atomicity
+
+Every write path that spans more than one insert is a single `@Transactional`
+unit. Creating a refund writes four rows — a transaction, two postings, and the
+refund record — and either all four commit or none do. Reversals are the same,
+as payments already were in Phase 1.
+
+### The deliberate-failure test
+
+Claiming all-or-nothing is easy; the suite proves it. `failureMidWriteCommitsNothing`
+in `RefundReversalFlowIntegrationTest` records the row counts, then forces the
+**last** insert of a refund to throw:
+
+```java
+doThrow(new IllegalStateException("simulated failure after the postings were written"))
+        .when(refundRepositorySpy).save(any(Refund.class));
+```
+
+The ordering is what makes this a real test rather than a formality.
+`createBalanced` runs first and **flushes**, so by the time the failure fires,
+the transaction row and both postings have genuinely reached PostgreSQL. The
+test then reads the database directly with `JdbcTemplate` and asserts the
+counts are unchanged and the payer's balance has not moved. If the transactional
+boundary were wrong, those flushed rows would still be there.
+
+It finishes by performing the same refund again successfully, showing the
+rollback left no broken state behind.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -189,6 +281,8 @@ part of the product.
 | `POST` | `/accounts` | Create an account. |
 | `GET` | `/accounts/{id}/balance` | Balance derived from postings. |
 | `POST` | `/payments` | Payment → transaction → balanced DEBIT/CREDIT pair. Returns the transaction with its postings. |
+| `POST` | `/payments/{id}/refunds` | Refund all or part of a payment as a new, opposite transaction. |
+| `POST` | `/transactions/{id}/reversals` | Fully reverse a transaction, once. Body optional. |
 
 `POST /accounts` is not itself a Phase 1 deliverable; it exists because the
 payment flow needs two accounts to exist before it can be exercised at all.
@@ -291,20 +385,30 @@ docker exec ledgerguard-postgres psql -U ledgerguard -d ledgerguard -tAc "SELECT
 ## Schema
 
 ```
-accounts     (id, name, currency, created_at)
-transactions (id, description, currency, created_at)
-payments     (id, source_account_id, destination_account_id, transaction_id,
-              amount_minor, currency, status, created_at)
-postings     (id, transaction_id, account_id, type, amount_minor, currency, created_at)
+V1 ── accounts     (id, name, currency, created_at)
+      transactions (id, description, currency, created_at)
+      payments     (id, source_account_id, destination_account_id, transaction_id,
+                    amount_minor, currency, status, created_at)
+      postings     (id, transaction_id, account_id, type, amount_minor, currency, created_at)
+
+V2 ── refunds      (id, payment_id, transaction_id UNIQUE,
+                    amount_minor, currency, created_at)
+      reversals    (id, original_transaction_id UNIQUE,
+                    reversal_transaction_id UNIQUE, created_at)
 ```
 
 `postings.currency` is carried per posting rather than inherited from the
 transaction, because the invariant is stated per currency and the balance
 aggregate is per account *and* currency.
 
+**Phase 2 added no columns to the Phase 1 tables.** The links live on the new
+rows, so nothing that already worked was disturbed. Neither new table stores
+money that moves — money still moves only through postings.
+
 ---
 
 ## Not in this phase
 
-Refunds, reversals, idempotency handling, and Kafka are explicitly out of scope
-for Phase 1 and are not implemented.
+Idempotency handling and Kafka are explicitly out of scope for Phase 2 and are
+not implemented. Refunds and reversals, which were out of scope for Phase 1,
+landed in Phase 2 and are documented above.
