@@ -275,9 +275,21 @@ table later means backfilling every row; the sweeper belongs to a later phase.
 
 ## Evidence: 100 concurrent duplicate requests
 
-Measured against a real running instance on 2026-09-10, not estimated. Both
-runs fired 100 `curl` processes released together at `POST /payments` for
-$12.34.
+```
+Requests:            100
+Financial effects:   1     (idempotency_keys row count for that key = 1)
+Duplicates handled:  99
+Ledger drift:        $0    (verified via SUM across all postings)
+```
+
+**How these were captured.** By firing 100 concurrent `curl` processes from a
+shell against a running instance and then querying PostgreSQL directly — not
+from a unit test assertion. The integration suite proves the same property
+against a Testcontainers database, but the figures above come from real HTTP
+traffic against a real server, checked by reading the rows afterwards.
+
+Measured on 2026-09-10, not estimated. Both runs below fired 100 `curl`
+processes released together at `POST /payments` for $12.34.
 
 ### Run 1 — 100 requests, one shared `Idempotency-Key`
 
