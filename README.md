@@ -13,7 +13,7 @@ hand-picked ones. It found a real defect; see [the bug log](#bug-log).
 | 3 — Idempotency & Safe Retries | `v0.3-idempotency` | Required idempotency keys, byte-identical replay, and exactly-one-effect under concurrent duplicates. |
 | 4 — Transactional Outbox + Kafka | `v0.4-kafka-outbox` | Events written with the ledger transaction, published after commit, at-least-once with consumer-side deduplication. |
 | 5 — Settlement Simulator & Reconciliation | `v0.5-reconciliation` | An independent external settlement source, six discrepancy classifications, and persisted incidents with evidence linkage. |
-| 6 — Verification & Property-Based Testing | `v0.6-verification` | 37 jqwik properties over randomized payments, refunds, reversals, currencies, amounts and replays. No new feature; one defect found and fixed. |
+| 6 — Verification & Property-Based Testing | `v0.6-verification` | 38 jqwik properties over randomized payments, refunds, reversals, currencies, amounts and replays. No new feature; one defect found and fixed. |
 
 Nothing beyond those six phases is implemented.
 
@@ -860,7 +860,7 @@ readable in one place.
 | `subMinorAmounts` | a decimal with exactly one more fraction digit than its currency has, final digit non-zero | 10.255 USD, 10.5 JPY, 1.2345 KWD — must be **rejected, never rounded** |
 | `refundPlans` | a payment amount plus partial-refund splits summing to at most it, normalised so the **last partial lands exactly on the remainder** | payments of 2, 3 and 5 minor units, split — the sharpest possible test of the cap |
 | `refundPercents` | 1-130% of the payment | over 100% is included so the generator produces refunds that must fail |
-| `operationChains` | sequences of 1-6 steps over `REFUND`, `REVERSE_PAYMENT`, `REVERSE_LAST_REFUND`, `REPLAY_LAST` | invalid sequences are generated deliberately — double reversal, refund past the cap, replay of a refused step |
+| `operationChains` | sequences of 1-6 steps over `REFUND`, `REVERSE_PAYMENT`, `REVERSE_LAST_REFUND`, `REVERSE_LAST_REVERSAL`, `REPLAY_LAST` | invalid sequences are generated deliberately — double reversal, refund past the cap, replay of a refused step. `REVERSE_LAST_REVERSAL` targets the transaction the previous reversal *produced*, which is what lets a chain go past depth two |
 | `currencyLegs` | posting sets across 1-3 currencies, each currency independently balanced or skewed by a generated delta | skews of plus/minus 1 and plus/minus 1000, so one generator produces sets that must be accepted **and** sets that must be rejected |
 
 Amounts are generated as **minor units** and converted to decimals with
@@ -869,7 +869,7 @@ currency — unless being unrepresentable is the point of that generator.
 
 ### The properties
 
-37 properties across eight classes. **In-memory** where the property is about a
+38 properties across eight classes. **In-memory** where the property is about a
 pure function; **Testcontainers PostgreSQL** wherever it depends on persistence,
 a schema constraint or a row lock actually holding, rather than on in-memory
 logic agreeing with itself.
@@ -906,6 +906,7 @@ logic agreeing with itself.
 | **A transaction can only ever be reversed once** | `ReversalPropertyTest` | currency, amount, attempt count | **Postgres** | 80 |
 | Reversing a refund undoes exactly the refund | `ReversalPropertyTest` | currency, amount | **Postgres** | 80 |
 | Reversing a reversal reinstates the original exactly | `ReversalPropertyTest` | currency, amount | **Postgres** | 80 |
+| **Reversal chains conserve money at any depth**, and alternate exactly | `ReversalPropertyTest` | currency, amount, depth 1-6 | **Postgres** | 80 |
 | **No chain of operations ever creates money** | `TransactionSequencePropertyTest` | `operationChains`, `refundPercents` | **Postgres** | 80 |
 | No chain of operations ever unbalances the ledger | `TransactionSequencePropertyTest` | `operationChains` | **Postgres** | 80 |
 | Refunds across any chain never exceed the payment | `TransactionSequencePropertyTest` | `operationChains` | **Postgres** | 80 |
@@ -1081,11 +1082,25 @@ alone:
   refunds is a design decision, not a bug fix, and it belongs in a phase that
   decides it deliberately.
 - **A reversal is itself reversible.** Nothing marks a reversal transaction
-  special, so reversing one reinstates the original movement. The arithmetic
-  stays exact however deep the chain goes, which
-  `reversingAReversalReinstatesTheOriginalExactly` asserts. That is consistent
+  special, so reversing one reinstates the original movement. That is consistent
   with the stated rule — any transaction may be reversed once — rather than an
-  oversight.
+  oversight, and it is covered three ways rather than assumed:
+  `reversingAReversalReinstatesTheOriginalExactly` pins the depth-2 case by name;
+  `reversalChainsConserveMoneyAtAnyDepth` generates depths 1-6 and asserts at
+  **every** step that the pair nets to zero, that the payer is never better off
+  than before paying, and that the balance alternates *exactly* between 0 and
+  −amount (drift of one minor unit at depth five would satisfy conservation and
+  still be a bug); and the `REVERSE_LAST_REVERSAL` step puts the same chains
+  under `noChainOfOperationsEverCreatesMoney` interleaved with refunds and
+  replays — an instrumented run confirmed it is accepted 38 times across the
+  class's 240 tries, so it is live coverage rather than a step that always
+  skips.
+
+  Note what stays true at even depths, where the money really has moved to the
+  payee again: the payment was marked `REVERSED` by the *first* reversal and
+  stays that way, so it can never be refunded on top. That is conservative — it
+  under-refunds rather than over-refunds — and the depth property asserts the
+  refund is refused at every depth rather than leaving it implied.
 
 And one honest note about the properties themselves: JSON that parses but is not
 an event envelope (a bare array, a JSON `null`) is **not** covered by
@@ -1205,7 +1220,7 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-145 tests across twenty classes — 108 example-based, and 37 jqwik properties
+146 tests across twenty classes — 108 example-based, and 38 jqwik properties
 that between them run tens of thousands of generated cases:
 
 | Class | Tests | Covers |
@@ -1233,7 +1248,7 @@ property-to-generator map):
 | `LedgerPersistencePropertyTest` | 5 | Postgres | the invariant as stored data, currency isolation, and refusals writing nothing |
 | `IdempotencyPropertyTest` | 4 | Postgres | exactly one financial effect per key, sequential and concurrent |
 | `RefundCapPropertyTest` | 3 | Postgres | the cap across arbitrary sequences of partial refunds |
-| `ReversalPropertyTest` | 4 | Postgres | exact negation, and reverse-once |
+| `ReversalPropertyTest` | 5 | Postgres | exact negation, reverse-once, and reversal chains at arbitrary depth |
 | `TransactionSequencePropertyTest` | 3 | Postgres | whole chains of legal and illegal operations — where BUG-1 was found |
 | `EventReplayPropertyTest` | 4 | Postgres | at-least-once delivery, exactly-once effect |
 

@@ -177,7 +177,10 @@ class TransactionSequencePropertyTest {
         private final List<String> log = new ArrayList<>();
 
         private UUID lastRefundTransactionId;
+        /** The transaction the last accepted reversal was applied TO, for a keyed replay. */
         private UUID lastReversedTransactionId;
+        /** The transaction the last accepted reversal PRODUCED, so it can be reversed in turn. */
+        private UUID lastReversalTransactionId;
         private String lastKey;
         private Step lastStep;
         private BigDecimal lastAmount;
@@ -206,6 +209,13 @@ class TransactionSequencePropertyTest {
                         reverse(lastRefundTransactionId, "REVERSE_LAST_REFUND");
                     }
                 }
+                case REVERSE_LAST_REVERSAL -> {
+                    if (lastReversalTransactionId == null) {
+                        log.add("REVERSE_LAST_REVERSAL (no reversal yet, skipped)");
+                    } else {
+                        reverse(lastReversalTransactionId, "REVERSE_LAST_REVERSAL");
+                    }
+                }
                 case REPLAY_LAST -> replayLast();
             }
         }
@@ -227,9 +237,13 @@ class TransactionSequencePropertyTest {
         private void reverse(UUID transactionId, String label) {
             String key = PropertyLedger.freshKey();
             try {
-                PropertyLedger.reverse(key, transactionId);
+                JsonNode reversal = PropertyLedger.reverse(key, transactionId);
                 remember(Step.REVERSE_PAYMENT, key, null);
                 lastReversedTransactionId = transactionId;
+                // Point the next REVERSE_LAST_REVERSAL at what this one produced,
+                // so repeated steps go deeper instead of re-attempting the same
+                // transaction and being refused every time after the first.
+                lastReversalTransactionId = PropertyLedger.reversalTransactionIdOf(reversal);
                 log.add(label + " -> accepted");
             } catch (RuntimeException refused) {
                 log.add(label + " -> " + refused.getClass().getSimpleName());

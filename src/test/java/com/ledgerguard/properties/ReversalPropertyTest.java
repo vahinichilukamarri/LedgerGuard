@@ -167,6 +167,77 @@ class ReversalPropertyTest {
         assertThat(PropertyLedger.unbalancedTransactionCurrencyPairs()).isEmpty();
     }
 
+    /**
+     * The same chain taken to an arbitrary depth: payment, reversal, reversal of
+     * that reversal, and so on.
+     *
+     * <p>The previous property fixes the depth at two because that is the case
+     * worth naming. This one generates it, and asserts the two things that have
+     * to hold at <em>every</em> step rather than only at the end:
+     *
+     * <ul>
+     *   <li><b>conservation</b> — the payer's balance never rises above zero and
+     *       the pair always nets to zero, so no depth of reversal chain can leave
+     *       the payer better off than before they paid;</li>
+     *   <li><b>exact alternation</b> — after an odd number of reversals the payer
+     *       is whole, after an even number they are out of pocket the original
+     *       amount, and never any other value. Drift of a single minor unit at
+     *       depth five would satisfy conservation and still be a bug.</li>
+     * </ul>
+     *
+     * <p>Every transaction in such a chain balances on its own no matter what,
+     * which is exactly why that is not the property being stated here.
+     */
+    @Property(tries = 80)
+    void reversalChainsConserveMoneyAtAnyDepth(@ForAll("supported") String currency,
+                                               @ForAll("amounts") long amountMinor,
+                                               @ForAll @IntRange(min = 1, max = 6) int depth) {
+        UUID payer = PropertyLedger.createAccount(currency);
+        UUID payee = PropertyLedger.createAccount(currency);
+
+        JsonNode payment = PropertyLedger.pay(
+                payer, payee, Money.toMajorUnits(amountMinor, currency), currency);
+        UUID paymentId = PropertyLedger.paymentIdOf(payment);
+
+        // Each iteration reverses whatever the previous one produced.
+        UUID target = PropertyLedger.transactionIdOf(payment);
+
+        for (int reversals = 1; reversals <= depth; reversals++) {
+            JsonNode reversal = PropertyLedger.reverse(target);
+            target = PropertyLedger.reversalTransactionIdOf(reversal);
+
+            long payerBalance = PropertyLedger.balanceMinorUnits(payer, currency);
+            long payeeBalance = PropertyLedger.balanceMinorUnits(payee, currency);
+
+            assertThat(payerBalance + payeeBalance)
+                    .as("after %d reversals the pair must still net to zero", reversals)
+                    .isZero();
+            assertThat(payerBalance)
+                    .as("after %d reversals the payer must not be better off than before paying",
+                            reversals)
+                    .isLessThanOrEqualTo(0L);
+
+            long expected = reversals % 2 == 1 ? 0L : -amountMinor;
+            assertThat(payerBalance)
+                    .as("after %d reversals of %d %s the payer must be exactly %d",
+                            reversals, amountMinor, currency, expected)
+                    .isEqualTo(expected);
+
+            assertThat(PropertyLedger.ledgerNetMinorUnits()).isZero();
+            assertThat(PropertyLedger.unbalancedTransactionCurrencyPairs()).isEmpty();
+        }
+
+        // The payment was marked REVERSED by the first reversal and stays that
+        // way however deep the chain goes, so it can never be refunded on top.
+        // That is conservative even at even depths, where the money really has
+        // moved to the payee again — it under-refunds rather than over-refunds.
+        assertThatThrownBy(() -> PropertyLedger.refund(
+                paymentId, Money.toMajorUnits(1L, currency)))
+                .as("a reversed payment must stay unrefundable at every depth")
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(PropertyLedger.refundCountFor(paymentId)).isZero();
+    }
+
     // ------------------------------------------------------------- generators
 
     @Provide

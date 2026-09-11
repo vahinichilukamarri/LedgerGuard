@@ -234,6 +234,17 @@ public final class LedgerArbitraries {
         REVERSE_PAYMENT,
         /** Reverse the most recent refund's transaction. Legal at most once each. */
         REVERSE_LAST_REFUND,
+        /**
+         * Reverse the transaction the most recent reversal <em>produced</em>.
+         *
+         * <p>This is what takes a chain past depth two. A reversal is an ordinary
+         * transaction, so it is itself reversible, and reversing it reinstates the
+         * movement the first reversal undid. Without this step the alphabet can
+         * never reach a reversal-of-a-reversal at all: REVERSE_PAYMENT always
+         * targets the payment's own transaction and a second attempt is simply
+         * refused.
+         */
+        REVERSE_LAST_REVERSAL,
         /** Re-send the previous operation under its original idempotency key. */
         REPLAY_LAST
     }
