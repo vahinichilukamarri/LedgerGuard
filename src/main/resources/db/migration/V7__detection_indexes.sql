@@ -22,7 +22,11 @@ CREATE INDEX idx_payments_source_created
 CREATE INDEX idx_payments_destination_created
     ON payments (destination_account_id, created_at);
 
--- Reconciliation incidents are joined back to accounts through their
--- transaction, and the mismatch-rate signal filters them by time.
-CREATE INDEX idx_incidents_created
-    ON reconciliation_incidents (created_at);
+-- No index is added on reconciliation_incidents. An earlier draft added one on
+-- created_at, on the assumption that the mismatch-rate signal would filter
+-- incidents by time. It does not: a transaction belongs to a window by its own
+-- timestamp, not by when reconciliation happened to notice it, because
+-- reconciliation runs after the fact and often long after. Judging a
+-- transaction by the incident's clock would make the rate depend on the
+-- reconciliation schedule. The signal joins on transaction_id, which
+-- idx_incidents_txn already covers.
