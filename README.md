@@ -2,12 +2,13 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 8 — Statistical Anomaly Detection.** Phases 6 and 7
-asked whether the ledger is *correct*. This phase asks a different question:
-which activity on a correct ledger is worth a human looking at? Five
-statistically-grounded signals over existing ledger and reconciliation data,
-each producing a score rather than a flag. Statistical only — no ML model yet.
-See [DETECTION_REPORT.md](DETECTION_REPORT.md).
+**Current phase: Phase 9 — Isolation Forest ML Detection.** A learned model
+sits *beside* Phase 8's statistical signals, never folded into them: two scores,
+reported side by side, with their relationship named rather than averaged away.
+Neither is validated — there is no labelled data — and the ML layer is not more
+authoritative for being a model. See
+[ML_DETECTION_REPORT.md](ML_DETECTION_REPORT.md) and
+[DETECTION_REPORT.md](DETECTION_REPORT.md).
 
 | Phase | Tag | What it added |
 |---|---|---|
@@ -19,8 +20,9 @@ See [DETECTION_REPORT.md](DETECTION_REPORT.md).
 | 6 — Verification & Property-Based Testing | `v0.6-verification` | 38 jqwik properties over randomized payments, refunds, reversals, currencies, amounts and replays. No new feature; one defect found and fixed. |
 | 7 — ChaosLab: Fault Injection & Resilience | `v0.7-chaoslab` | 15 deterministic fault-injection scenarios at the JDBC, broker and clock seams, plus a harness self-test. No new feature; one documentation defect found and fixed, no functional defect. |
 | 8 — Statistical Anomaly Detection | `v0.8-detection-statistical` | Five anomaly signals over robust statistics and exact discrete tails, combined into a weighted composite. Read-only, query-time, no ML. |
+| 9 — Isolation Forest ML Detection | `v0.9-detection-ml` | A hand-rolled Isolation Forest over an 11-feature vector, scored in parallel with the statistical composite and never blended with it. Unvalidated: no labelled data exists. |
 
-Nothing beyond those eight phases is implemented.
+Nothing beyond those nine phases is implemented.
 
 ---
 
@@ -1317,6 +1319,116 @@ fan-out across many accounts each behaving unremarkably is invisible to all five
 
 ---
 
+## Machine learning (Phase 9 - Isolation Forest)
+
+Phase 8 built five statistical signals with thresholds from the literature. This
+phase adds a learned model beside them.
+
+**Full detail is in [ML_DETECTION_REPORT.md](ML_DETECTION_REPORT.md).** The short
+version:
+
+- **Isolation Forest, hand-rolled**, with Liu-Ting-Zhou (2008) cited inline in
+  the code so the implementation can be checked against the paper line by line.
+- **11 features**: Phase 8's five *raw* statistics plus six the statistical layer
+  structurally cannot express.
+- **Parallel score, never blended** with the statistical composite.
+- **Unvalidated.** No labelled data exists, so precision and recall are
+  unmeasured — not approximately known, unmeasured.
+
+### Why hand-rolled rather than a library or a sidecar
+
+The reason that actually decides it: this phase must unit test **tree
+construction, path-length scoring and the isolation score formula**, and those
+tests cannot be written against a library's internals or across a sidecar's
+process boundary. A dependency would not have made them inconvenient, it would
+have made them unwritable.
+
+Two supporting reasons: the algorithm is ~150 lines and completely specified in a
+nine-page paper, and determinism needs the RNG under local control, since a
+library's internal use of its own generator is not part of its contract.
+
+### Why raw statistics, not Phase 8's published scores
+
+`Signal.normalise()` clamps everything below threshold to 0 and above saturation
+to 1. Right for a human-readable composite, wrong as model input: surprisal 4 and
+surprisal 40 become the same number, and that ordering is most of the
+information. Same principle as Phase 8 computing at query time rather than from a
+stored aggregate — don't hand the next layer data that has already had its
+information removed.
+
+Six features cover what Phase 8 cannot see at all. The clearest is **absolute
+amount**: every statistical signal is relative to the account's own history,
+deliberately, so nothing there can notice that a magnitude is rare across the
+whole population.
+
+### The imputation risk, stated as plainly as Phase 8's weight caveat
+
+A Phase 8 statistic is `NaN` when its signal had too little data. Those are
+imputed as zero, which conflates *measured and unremarkable* with *not
+measurable*. The `dataCompleteness` feature makes that visible to the model.
+
+> **This exposes the problem, it does not solve it.** If most of the training
+> population has thin data, the imputed zeros dominate and the model learns the
+> imputation rather than the behaviour — separating accounts by how much history
+> they have rather than how they behave, while the scores look entirely
+> reasonable. On small ledgers that is the likely case, not a remote one.
+
+### Two scores, never one
+
+```
+statisticalScore : 0.62      <- explainable signal by signal
+mlScore          : 0.71      <- not explainable
+agreement        : BOTH_ELEVATED
+```
+
+Folding the model in as a sixth signal was rejected because it would need a
+sixth unfitted weight, would make the composite partly unexplainable (which
+Phase 10's explanation layer would inherit), and would destroy the most useful
+thing here: **disagreement**. An account the statistics call quiet and the model
+calls extreme is the single most interesting row in the system. Averaging hides
+it.
+
+And combining two unvalidated numbers produces one unvalidated number that looks
+more authoritative for being single.
+
+| Agreement | Meaning |
+|---|---|
+| `BOTH_QUIET` | neither elevated |
+| `BOTH_ELEVATED` | the only case where the two layers corroborate |
+| `STATISTICAL_ONLY` | unusual for this account, ordinary across the population |
+| `ML_ONLY` | the row worth reading first |
+
+### Training
+
+Explicit, never lazy — a model appearing as a side effect of the first read would
+be trained on whatever the ledger held at that moment, with nobody knowing which
+snapshot they got. Below **32 accounts** training is refused rather than done
+badly: on a small population almost every point is few and different, so the
+model would describe the size of the dataset. "No model" is a distinct answer
+from a score of zero.
+
+```powershell
+curl.exe -s -X POST "http://localhost:8080/detection/model/train"
+```
+
+```powershell
+curl.exe -s "http://localhost:8080/detection/accounts/<ACCOUNT_ID>"
+```
+
+> In PowerShell `curl` is an alias for `Invoke-WebRequest` — use `curl.exe`.
+
+### What the tests establish, and what they do not
+
+> **Sanity-checking synthetic anomalies-by-construction tells you the model isn't
+> broken, not that it's useful on real data.** A forest that separates a point at
+> (12, -11) from a Gaussian cloud has shown its arithmetic works. It has shown
+> nothing about whether real fraud looks like an outlier in this feature space.
+
+Measuring that needs labelled outcomes this system has never had. Until then the
+model is a hypothesis with a test suite, not a validated detector.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -1427,10 +1539,10 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-233 tests across thirty classes — 108 example-based, 38 jqwik properties that
-between them run tens of thousands of generated cases, 22 ChaosLab tests (15
-fault-injection scenarios plus a 7-test harness self-test), and 65 detection
-tests:
+280 tests across thirty-four classes — 108 example-based, 38 jqwik properties
+that between them run tens of thousands of generated cases, 22 ChaosLab tests (15
+fault-injection scenarios plus a 7-test harness self-test), 65 statistical
+detection tests and 47 ML detection tests:
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -1482,6 +1594,15 @@ statistical basis of each signal):
 | `SignalUnitTest` | 24 | each signal: an obvious anomaly, a clear non-anomaly, and boundary cases |
 | `AnomalyScorerTest` | 7 | weighting, renormalisation, and the thin-evidence trade |
 | `DetectionFlowIntegrationTest` | 7 | signals against a real ledger the real reconciler has run over |
+
+Phase 9 ML detection tests (see [ML_DETECTION_REPORT.md](ML_DETECTION_REPORT.md)):
+
+| Class | Tests | Covers |
+|---|---|---|
+| `IsolationForestTest` | 20 | tree construction, path length, the score formula against hand arithmetic, determinism |
+| `FeatureExtractorTest` | 12 | the feature pipeline, imputation contract, log transforms, signed z-score |
+| `AgreementTest` | 7 | the four-way relationship and why its two thresholds differ |
+| `MlDetectionFlowIntegrationTest` | 8 | training, the population gate, and determinism end to end on a real ledger |
 
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
@@ -1544,7 +1665,9 @@ are KRaft; the difference is only in how the port is negotiated.
 | `GET` | `/reconciliation/incidents` | Filter incidents by `type`, `severity`, `status`, `transactionId`. |
 | `POST` | `/reconciliation/incidents/{id}/resolve` | Mark an incident resolved. |
 | `GET` | `/detection/accounts/{id}` | Anomaly score for one account, with every signal's reasoning. |
-| `GET` | `/detection/anomalies` | Accounts ranked by score, filtered by `minScore`. |
+| `GET` | `/detection/anomalies` | Accounts either layer flags, worst first. Not ranked by a blended score, because there is no blended score. |
+| `POST` | `/detection/model/train` | Train an Isolation Forest on the ledger as it stands. Refused below 32 accounts. |
+| `GET` | `/detection/model` | What model is loaded, if any. |
 | `POST` | `/admin/settlement/faults` | Make the simulated processor misbehave, for demos. |
 | `GET` | `/admin/settlement/records` | Inspect what the external world currently believes. |
 
@@ -1570,6 +1693,7 @@ payment flow needs two accounts to exist before it can be exercised at all.
 | `422` | Refund would exceed what remains refundable (`refund_amount_exceeded`). |
 | `422` | Transaction has already been reversed (`transaction_already_reversed`). |
 | `422` | Reversing a payment that has already been refunded (`refunded_payment_cannot_be_reversed`) — doing both would return more than was paid. Added in Phase 6; see [BUG-1](#bug-1--a-payment-could-be-both-refunded-and-reversed-returning-more-than-was-paid). |
+| `422` | Training a model on too small a population (`insufficient_training_data`) — a forest over a handful of accounts describes the size of the dataset, not behaviour. |
 
 Every error uses the same shape — `error`, `message`, `details`, `timestamp` —
 including unparseable bodies, which would otherwise fall through to the
@@ -1799,23 +1923,28 @@ money that moves — money still moves only through postings.
 
 ## Not in this phase
 
-**Anything ML-shaped is out of scope for Phase 8 and is not implemented.** There
-is no Isolation Forest, no model, no training and no fitted parameter anywhere in
-the detection layer; that is the next phase, and building half of it here without
-labelled data would be the expensive kind of premature.
+**The model is unvalidated, and nothing here pretends otherwise.** There is no
+labelled data, so precision and recall are unmeasured. No scheduled retraining,
+no persistence of the model across a restart, no drift detection and no
+champion/challenger - the last two because without labels you can only detect
+drift in the *input* distribution, never in accuracy, and comparing two models
+needs a metric to compare them on.
 
-Property-based testing was the Phase 6 deliverable, ChaosLab the Phase 7 one, and
-the statistical signal layer the Phase 8 one; all three now exist - see
-[Verification](#verification-phase-6), [Resilience](#resilience-phase-7---chaoslab)
-and [Detection](#detection-phase-8---statistical).
+Property-based testing was the Phase 6 deliverable, ChaosLab the Phase 7 one, the
+statistical signal layer the Phase 8 one and the Isolation Forest the Phase 9
+one; all four now exist - see [Verification](#verification-phase-6),
+[Resilience](#resilience-phase-7---chaoslab),
+[Detection](#detection-phase-8---statistical) and
+[Machine learning](#machine-learning-phase-9---isolation-forest).
 
 Each layer's coverage limits are deliberate and documented rather than implied.
 ChaosLab does not exercise multi-instance network partitions, clock skew between
-nodes, disk exhaustion or lock contention under sustained load. The detection
+nodes, disk exhaustion or lock contention under sustained load. The statistical
 layer uses no time decay and no per-account baseline for its two rate signals,
-both deferred to the ML phase for want of data to fit them with, and every signal
-is per-account, so coordinated activity spread across many accounts is invisible
-to all five.
+and every signal is per-account, so coordinated activity spread across many
+accounts is invisible to all five. The ML layer inherits that per-account limit,
+adds an imputation risk that grows as the population's history thins, and has
+never been measured against ground truth.
 
 Two pieces of deliberate debt, both documented where they live:
 
