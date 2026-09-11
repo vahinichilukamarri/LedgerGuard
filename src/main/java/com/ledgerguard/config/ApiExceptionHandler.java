@@ -3,6 +3,7 @@ package com.ledgerguard.config;
 import com.ledgerguard.accounts.AccountNotFoundException;
 import com.ledgerguard.idempotency.IdempotencyKeyConflictException;
 import com.ledgerguard.idempotency.IdempotencyKeyRequiredException;
+import com.ledgerguard.detection.ml.MlDetectionService;
 import com.ledgerguard.payments.PaymentNotFoundException;
 import com.ledgerguard.refunds.RefundAmountExceededException;
 import com.ledgerguard.reversals.RefundedPaymentCannotBeReversedException;
@@ -75,6 +76,18 @@ public class ApiExceptionHandler {
             RefundedPaymentCannotBeReversedException e) {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
                 .body(ApiError.of("refunded_payment_cannot_be_reversed", e.getMessage()));
+    }
+
+    /**
+     * Refusing to train a model that would only describe the size of the
+     * dataset. Same family as the ledger 422s: the request was well formed, but
+     * the current state does not support it.
+     */
+    @ExceptionHandler(MlDetectionService.InsufficientTrainingDataException.class)
+    public ResponseEntity<ApiError> handleInsufficientTrainingData(
+            MlDetectionService.InsufficientTrainingDataException e) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(ApiError.of("insufficient_training_data", e.getMessage()));
     }
 
     @ExceptionHandler(IdempotencyKeyRequiredException.class)
