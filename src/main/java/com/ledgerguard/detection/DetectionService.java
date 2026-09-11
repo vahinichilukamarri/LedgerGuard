@@ -139,9 +139,47 @@ public class DetectionService {
 
     @Transactional(readOnly = true)
     public AnomalyScore scoreAccount(UUID accountId, Instant asOf) {
+        return assess(accountId, asOf).score();
+    }
+
+    /**
+     * An account's activity together with its statistical score.
+     *
+     * <p>Both, because the ML layer needs the raw activity to derive features the
+     * statistical signals do not expose — absolute amounts, elapsed time,
+     * historical rank. Returning the pair keeps the SQL in this class rather than
+     * having a second layer grow its own copy of it.
+     */
+    public record ScoredAccount(AccountActivity activity, AnomalyScore score) {
+    }
+
+    @Transactional(readOnly = true)
+    public ScoredAccount assess(UUID accountId, Instant asOf) {
         Account account = accounts.findById(accountId)
                 .orElseThrow(() -> new AccountNotFoundException(accountId));
-        return scorer.score(activityOf(account, asOf, globalRates()));
+        AccountActivity activity = activityOf(account, asOf, globalRates());
+        return new ScoredAccount(activity, scorer.score(activity));
+    }
+
+    /**
+     * Every account, assessed against one shared population baseline.
+     *
+     * <p>Ordered by account id rather than left in whatever order the repository
+     * returned. Nothing downstream should depend on that order, but the forest
+     * trains on this list and a forest is only reproducible if its training rows
+     * arrive the same way every time — the Phase 7 lesson about iteration order
+     * applies to model training more sharply than to anything before it.
+     */
+    @Transactional(readOnly = true)
+    public List<ScoredAccount> assessAll(Instant asOf) {
+        AccountActivity.GlobalRates rates = globalRates();
+        return accounts.findAll().stream()
+                .sorted(Comparator.comparing(Account::getId))
+                .map(account -> {
+                    AccountActivity activity = activityOf(account, asOf, rates);
+                    return new ScoredAccount(activity, scorer.score(activity));
+                })
+                .toList();
     }
 
     /**
@@ -154,9 +192,8 @@ public class DetectionService {
      */
     @Transactional(readOnly = true)
     public List<AnomalyScore> rankAccounts(double minimumScore, Instant asOf) {
-        AccountActivity.GlobalRates rates = globalRates();
-        return accounts.findAll().stream()
-                .map(account -> scorer.score(activityOf(account, asOf, rates)))
+        return assessAll(asOf).stream()
+                .map(ScoredAccount::score)
                 .filter(score -> score.composite() >= minimumScore)
                 .sorted(Comparator.comparingDouble(AnomalyScore::composite).reversed()
                         .thenComparing(AnomalyScore::accountId))
