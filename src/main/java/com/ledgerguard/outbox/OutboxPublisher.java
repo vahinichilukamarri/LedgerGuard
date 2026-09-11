@@ -88,11 +88,25 @@ public class OutboxPublisher {
      * One poll cycle in its own transaction, so row locks are released as soon
      * as it ends.
      *
-     * <p>On a send failure the batch stops rather than aborting: events already
-     * confirmed by the broker keep their {@code published_at}, and the one that
-     * failed is retried next cycle. Rolling the whole batch back would mean
-     * republishing events Kafka has already accepted, manufacturing duplicates
-     * this design is trying to keep rare.
+     * <p>On a <b>send</b> failure the batch stops rather than aborting: the loop
+     * breaks, the transaction still commits, so events already confirmed by the
+     * broker keep their {@code published_at} and only the one that failed is
+     * retried next cycle. Aborting instead would republish events Kafka has
+     * already accepted, manufacturing duplicates this design tries to keep rare.
+     *
+     * <p><b>A failure of the transaction itself is different, and worse.</b>
+     * Marks are applied by Hibernate at commit, and the whole drain is one
+     * transaction, so if the database refuses the UPDATE — or the process dies
+     * before commit — <em>every</em> mark in the batch rolls back, including
+     * those for events the broker already accepted. The next cycle then
+     * republishes the entire batch. That is safe, because consumers deduplicate
+     * on {@code eventId}, but it is a batch-sized burst of duplicates rather
+     * than the single one a send failure costs. Keeping {@code batch-size}
+     * modest bounds how large that burst can get.
+     *
+     * <p>Both paths share the property that matters: nothing is ever marked
+     * published that the broker did not confirm, so no event can be lost.
+     * Phase 7 verifies both — see {@code OutboxChaosTest} scenarios 3 and 4.
      *
      * @return how many events the broker confirmed
      */
