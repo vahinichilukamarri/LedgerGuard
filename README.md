@@ -2,12 +2,12 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 7 — ChaosLab: Fault Injection & Resilience Verification.**
-Phase 6 asked whether the invariants hold across randomized inputs. This phase
-asks whether they hold across randomized *failures* — dropped connections, a
-broker that accepts and then goes quiet, duplicated and out-of-order messages,
-a truncated external feed. Fifteen scenarios, no functional defect found; see
-[CHAOS_REPORT.md](CHAOS_REPORT.md) and [the bug log](#bug-log).
+**Current phase: Phase 8 — Statistical Anomaly Detection.** Phases 6 and 7
+asked whether the ledger is *correct*. This phase asks a different question:
+which activity on a correct ledger is worth a human looking at? Five
+statistically-grounded signals over existing ledger and reconciliation data,
+each producing a score rather than a flag. Statistical only — no ML model yet.
+See [DETECTION_REPORT.md](DETECTION_REPORT.md).
 
 | Phase | Tag | What it added |
 |---|---|---|
@@ -18,8 +18,9 @@ a truncated external feed. Fifteen scenarios, no functional defect found; see
 | 5 — Settlement Simulator & Reconciliation | `v0.5-reconciliation` | An independent external settlement source, six discrepancy classifications, and persisted incidents with evidence linkage. |
 | 6 — Verification & Property-Based Testing | `v0.6-verification` | 38 jqwik properties over randomized payments, refunds, reversals, currencies, amounts and replays. No new feature; one defect found and fixed. |
 | 7 — ChaosLab: Fault Injection & Resilience | `v0.7-chaoslab` | 15 deterministic fault-injection scenarios at the JDBC, broker and clock seams, plus a harness self-test. No new feature; one documentation defect found and fixed, no functional defect. |
+| 8 — Statistical Anomaly Detection | `v0.8-detection-statistical` | Five anomaly signals over robust statistics and exact discrete tails, combined into a weighted composite. Read-only, query-time, no ML. |
 
-Nothing beyond those seven phases is implemented.
+Nothing beyond those eight phases is implemented.
 
 ---
 
@@ -1221,6 +1222,101 @@ mvn test -D"test=ChaosHarnessTest"
 
 ---
 
+## Detection (Phase 8 - statistical)
+
+Phases 6 and 7 asked whether the ledger is correct. This layer asks which
+activity on a correct ledger deserves attention — which is a question about
+*unusualness*, not about correctness, and needs different tools.
+
+**Full detail is in [DETECTION_REPORT.md](DETECTION_REPORT.md).** The short
+version:
+
+- **Five signals**: amount outlier, velocity, burst, reconciliation mismatch
+  rate, refund/reversal rate. Each produces a score in `[0,1]`, not a flag, so
+  they can be combined and later learned from.
+- **Two statistical cores, not five ad-hoc rules.** Robust location/scale for
+  amounts; exact discrete tail probabilities for counts and rates.
+- **Read-only and query-time.** No new write path, no rolling-statistics table.
+- **No ML.** That is the next phase.
+
+### Why not z-scores
+
+Both cores exist to avoid one, for different reasons.
+
+**For amounts, the thing being hunted is the thing that breaks a z-score.**
+`(x − mean)/sd` computes both terms from a sample containing the outlier, so one
+large payment inflates the standard deviation enough to mask itself. So: median
+and **median absolute deviation**, both of which tolerate half the sample being
+corrupted before they move.
+
+That brings its own trap, and it is not rare: **MAD is zero whenever more than
+half an account's payments share one amount** — subscriptions, fixed fees,
+repeated transfers. A naive implementation divides by zero there and calls every
+regular-paying account infinitely anomalous. The fallback chain is MAD, then mean
+absolute deviation, then a degenerate branch where identical values score exactly
+zero and a differing one scores a bounded ceiling.
+
+**For counts, the normal approximation fails where this layer lives.** An account
+averaging 0.2 payments an hour that makes 3 scores 6.26 by `(k − λ)/√λ`, which
+reads as extraordinary; the exact Poisson answer is `p = 0.001148`, a surprisal
+of 2.94, which does not clear the flagging threshold. So the tails are computed
+exactly and reported as surprisal, `−log₁₀ p`, putting four signals on one linear
+scale.
+
+### The signals
+
+| Signal | Asks | Fires at | Minimum data |
+|---|---|---|---|
+| Amount outlier | Is a recent payment far from this account's own usual? | modified z ≥ 3.5 | 8 prior payments |
+| Velocity | Is it transacting faster than its own rate? | surprisal ≥ 3 | 20 baseline payments |
+| Burst | Is activity clustered tighter than its rate explains? | surprisal ≥ 3 | 20 baseline, 3 in window |
+| Reconciliation mismatch rate | Are its transactions failing reconciliation unusually often? | surprisal ≥ 3 | 10 transactions |
+| Refund/reversal rate | Are its payments coming straight back unusually often? | surprisal ≥ 3 | 10 payments |
+
+Velocity and burst are genuinely different questions: ten payments spread across
+an hour and ten inside three seconds have the same hourly count. Burst
+Bonferroni-corrects across the windows it scans, because searching for the most
+improbable window is a multiple comparison and an uncorrected scan statistic
+finds a "burst" in any Poisson process at all.
+
+### Scoring
+
+A weighted sum, renormalised over the signals that had enough data to judge.
+
+> **The weights are unfitted judgment, not learned parameters.** There is no
+> labelled data in this phase, so nothing has been validated against known fraud.
+> Fitting them is the ML layer's job.
+
+Signals have **three** states, not two: fired, looked and found nothing, and had
+nothing to judge with. Collapsing the last two is how a detection layer ends up
+quietly reporting that brand-new accounts are its safest.
+
+### Endpoints
+
+```powershell
+curl.exe -s "http://localhost:8080/detection/accounts/<ACCOUNT_ID>"
+```
+
+```powershell
+curl.exe -s "http://localhost:8080/detection/anomalies?minScore=0"
+```
+
+> In PowerShell, `curl` is an alias for `Invoke-WebRequest`, which takes
+> different arguments — use `curl.exe`.
+
+Both are GET, both return the per-signal breakdown with each signal's reasoning
+in words. With unfitted weights, a score nobody can take apart is a score nobody
+should act on.
+
+### Known limits, stated rather than implied
+
+The report carries the full posture. The two that matter most: **burst is
+aggressive for low-rate accounts**, because a Poisson process is an optimistic
+model of human payment behaviour, and **every signal is per-account**, so a
+fan-out across many accounts each behaving unremarkably is invisible to all five.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -1304,8 +1400,9 @@ automatically at startup: `V1__init.sql` creates `accounts`, `transactions`,
 `V4__outbox.sql` adds `outbox_events` and `processed_events`;
 `V5__reconciliation.sql` adds `settlement_records`, `reconciliation_runs` and
 `reconciliation_incidents`; `V6__payment_reversal_status.sql` widens the
-`payments.status` check constraint to admit `REVERSED`. All of them arrive with
-their foreign keys, not-null and check constraints.
+`payments.status` check constraint to admit `REVERSED`;
+`V7__detection_indexes.sql` adds two read indexes for the detection layer. All of
+them arrive with their foreign keys, not-null and check constraints.
 
 Hibernate is set to `ddl-auto: validate`, so Flyway owns the schema outright and
 the app refuses to start if the JPA mappings and the migrated schema disagree.
@@ -1330,9 +1427,10 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-168 tests across twenty-five classes — 108 example-based, 38 jqwik properties
-that between them run tens of thousands of generated cases, and 22 ChaosLab
-tests (15 fault-injection scenarios plus a 7-test harness self-test):
+233 tests across thirty classes — 108 example-based, 38 jqwik properties that
+between them run tens of thousands of generated cases, 22 ChaosLab tests (15
+fault-injection scenarios plus a 7-test harness self-test), and 65 detection
+tests:
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -1373,6 +1471,17 @@ attacks and the invariant it asserts):
 | `DatabaseFaultChaosTest` | 4 | dropped connections and timeouts mid-payment, mid-refund and mid-reconciliation |
 | `DeliveryChaosTest` | 3 | duplicate, out-of-order and interleaved delivery against both consumers |
 | `ReconciliationChaosTest` | 3 | malformed external records, a truncated feed, an incomplete event payload |
+
+Phase 8 detection tests (see [DETECTION_REPORT.md](DETECTION_REPORT.md) for the
+statistical basis of each signal):
+
+| Class | Tests | Covers |
+|---|---|---|
+| `RobustStatisticsTest` | 12 | median, MAD, the mean-deviation fallback and the degenerate case |
+| `DiscreteTailsTest` | 15 | Poisson and binomial tails against hand-computed values, surprisal, Laplace smoothing |
+| `SignalUnitTest` | 24 | each signal: an obvious anomaly, a clear non-anomaly, and boundary cases |
+| `AnomalyScorerTest` | 7 | weighting, renormalisation, and the thin-evidence trade |
+| `DetectionFlowIntegrationTest` | 7 | signals against a real ledger the real reconciler has run over |
 
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
@@ -1434,6 +1543,8 @@ are KRaft; the difference is only in how the port is negotiated.
 | `POST` | `/reconciliation/runs` | Run a reconciliation pass now and return what it found. |
 | `GET` | `/reconciliation/incidents` | Filter incidents by `type`, `severity`, `status`, `transactionId`. |
 | `POST` | `/reconciliation/incidents/{id}/resolve` | Mark an incident resolved. |
+| `GET` | `/detection/accounts/{id}` | Anomaly score for one account, with every signal's reasoning. |
+| `GET` | `/detection/anomalies` | Accounts ranked by score, filtered by `minScore`. |
 | `POST` | `/admin/settlement/faults` | Make the simulated processor misbehave, for demos. |
 | `GET` | `/admin/settlement/records` | Inspect what the external world currently believes. |
 
@@ -1666,6 +1777,10 @@ V5 ── settlement_records         (id, external_id UNIQUE, external_reference
 
 V6 ── payments.status may now also be 'REVERSED' (widened CHECK constraint;
                     no new table, no new column, no backfill)
+
+V7 ── two read indexes on payments (source_account_id, created_at) and
+                    (destination_account_id, created_at) for the detection
+                    layer. No table, no column, no write path
 ```
 
 `settlement_records` is the one money-bearing table here that is **mutable**,
@@ -1684,14 +1799,23 @@ money that moves — money still moves only through postings.
 
 ## Not in this phase
 
-Statistical signals and anything ML-shaped are out of scope for Phase 7 and are
-not implemented. Property-based testing was the Phase 6 deliverable and ChaosLab
-the Phase 7 one; both now exist - see [Verification](#verification-phase-6) and
-[Resilience](#resilience-phase-7---chaoslab).
+**Anything ML-shaped is out of scope for Phase 8 and is not implemented.** There
+is no Isolation Forest, no model, no training and no fitted parameter anywhere in
+the detection layer; that is the next phase, and building half of it here without
+labelled data would be the expensive kind of premature.
 
-ChaosLab's own coverage limits are deliberate and documented rather than implied:
-multi-instance network partitions, clock skew between nodes, disk exhaustion and
-lock contention under sustained load are not exercised.
+Property-based testing was the Phase 6 deliverable, ChaosLab the Phase 7 one, and
+the statistical signal layer the Phase 8 one; all three now exist - see
+[Verification](#verification-phase-6), [Resilience](#resilience-phase-7---chaoslab)
+and [Detection](#detection-phase-8---statistical).
+
+Each layer's coverage limits are deliberate and documented rather than implied.
+ChaosLab does not exercise multi-instance network partitions, clock skew between
+nodes, disk exhaustion or lock contention under sustained load. The detection
+layer uses no time decay and no per-account baseline for its two rate signals,
+both deferred to the ML phase for want of data to fit them with, and every signal
+is per-account, so coordinated activity spread across many accounts is invisible
+to all five.
 
 Two pieces of deliberate debt, both documented where they live:
 
