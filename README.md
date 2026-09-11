@@ -2,9 +2,12 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 6 — Verification & Property-Based Testing.** Everything
-built in Phases 1-5 is now stress-tested with randomized inputs rather than
-hand-picked ones. It found a real defect; see [the bug log](#bug-log).
+**Current phase: Phase 7 — ChaosLab: Fault Injection & Resilience Verification.**
+Phase 6 asked whether the invariants hold across randomized inputs. This phase
+asks whether they hold across randomized *failures* — dropped connections, a
+broker that accepts and then goes quiet, duplicated and out-of-order messages,
+a truncated external feed. Fifteen scenarios, no functional defect found; see
+[CHAOS_REPORT.md](CHAOS_REPORT.md) and [the bug log](#bug-log).
 
 | Phase | Tag | What it added |
 |---|---|---|
@@ -14,8 +17,9 @@ hand-picked ones. It found a real defect; see [the bug log](#bug-log).
 | 4 — Transactional Outbox + Kafka | `v0.4-kafka-outbox` | Events written with the ledger transaction, published after commit, at-least-once with consumer-side deduplication. |
 | 5 — Settlement Simulator & Reconciliation | `v0.5-reconciliation` | An independent external settlement source, six discrepancy classifications, and persisted incidents with evidence linkage. |
 | 6 — Verification & Property-Based Testing | `v0.6-verification` | 38 jqwik properties over randomized payments, refunds, reversals, currencies, amounts and replays. No new feature; one defect found and fixed. |
+| 7 — ChaosLab: Fault Injection & Resilience | `v0.7-chaoslab` | 15 deterministic fault-injection scenarios at the JDBC, broker and clock seams, plus a harness self-test. No new feature; one documentation defect found and fixed, no functional defect. |
 
-Nothing beyond those six phases is implemented.
+Nothing beyond those seven phases is implemented.
 
 ---
 
@@ -1069,6 +1073,50 @@ reversing the same one incidentally while testing something else entirely.
 
 ---
 
+#### DEFECT-1 (Phase 7)
+
+**A javadoc claim about batch publishing that was true on only one of two paths**
+
+Classification: **documentation**. Found by `OutboxChaosTest` scenario 3. The
+behaviour it described inaccurately is safe, so this is not a functional defect -
+but the sentence read as an unconditional guarantee and it was not one.
+
+`OutboxPublisher.drainOnce()` claimed that "events already confirmed by the
+broker keep their `published_at`, and the one that failed is retried next cycle."
+That holds when a **send** fails: the loop breaks, the transaction still commits,
+and the marks already applied survive. But marks are applied by Hibernate at
+commit and the whole drain is one transaction, so when the **transaction** fails
+- the database refusing the UPDATE, or the process dying before commit - every
+mark in the batch rolls back, including those for events the broker already
+accepted.
+
+Scenario 3 measured it: three events, all three sent, the mark UPDATE refused,
+all three rows still unpublished, and the next cycle republishing all three for
+six deliveries of three events. Consumers deduplicate, so those six deliveries
+produced exactly three effects; nothing was lost and nothing double-counted. The
+cost is a batch-sized burst of duplicates rather than the single one a send
+failure costs - which matters to anyone tuning `batch-size` or reasoning about
+duplicate volume during a database blip, and which the old sentence did not
+mention.
+
+**The fix** distinguishes the two paths explicitly, says that a transaction
+failure republishes the whole batch, notes that this is safe because consumers
+deduplicate on `eventId`, and points out that `batch-size` bounds the burst. It
+also states plainly what both paths share: nothing is ever marked published that
+the broker did not confirm, so no event can be lost.
+
+**The regression** is scenario 3 itself, which pins the measured behaviour
+(3 events, 6 deliveries, 3 effects) so a future change to the transaction
+boundary cannot quietly alter it without the javadoc being revisited.
+
+**No functional defect was found in Phase 7.** Fifteen scenarios across four
+failure families left every invariant intact. That is a weaker result than Phase
+6's, and it is reported as it happened rather than padded - the limits of what
+fifteen scenarios cover are stated in
+[CHAOS_REPORT.md](CHAOS_REPORT.md#functional-defects-none-found).
+
+---
+
 #### Not bugs, but worth writing down
 
 Two behaviours the properties surfaced that were examined and deliberately left
@@ -1108,6 +1156,68 @@ an event envelope (a bare array, a JSON `null`) is **not** covered by
 what it does with *unparseable* messages and makes no promise about that case, so
 asserting a behaviour there would have been inventing a contract rather than
 testing one.
+
+---
+
+## Resilience (Phase 7 - ChaosLab)
+
+Phase 6 verified the invariants against randomized inputs. ChaosLab verifies them
+against randomized **failures**, which is a different question: a ledger can be
+perfectly correct on every input it is given and still lose money the first time
+a connection drops mid-write.
+
+**Full detail, scenario by scenario, is in [CHAOS_REPORT.md](CHAOS_REPORT.md).**
+The short version:
+
+- **15 scenarios**, in four families - outbox and the dual-write gap, database
+  faults, delivery shape, and reconciliation partial failures.
+- **No production code was added for the harness.** Every fault is injected at a
+  seam that already existed: the pooled `DataSource`, the `KafkaTemplate` that
+  `OutboxPublisher` is constructed with, and the injected `Clock`.
+- **Deterministic, not random.** Seeds are constants declared by each scenario. A
+  chaos test that fails once and then passes teaches people to re-run the build
+  instead of reading the failure.
+- **One documentation defect found** ([DEFECT-1](#defect-1-phase-7)); no
+  functional defect.
+
+### What is injected, and where
+
+| Fault | Seam | Why there |
+|---|---|---|
+| Dropped connection, statement timeout | `ChaosDataSource` wraps the pooled `DataSource` and fails a nominated JDBC statement | The rollback under test is then PostgreSQL's own. A mocked repository that throws proves the service handles an exception; it cannot prove the database rolled anything back, because no database was involved |
+| Broker unavailable; **acknowledgement lost after acceptance** | `ChaosKafkaTemplate` replaces the `KafkaTemplate` | The ack-lost state is the one a real broker will not perform on demand, and it is the one that produces the duplicate the outbox design exists to tolerate |
+| Duplicate and out-of-order delivery | The consumers' own public entry points | It is a delivery *shape*, not an injected failure - no machinery needed |
+| Malformed and incomplete external data | Settlement rows written directly, plus Phase 5's existing `SettlementFaultService` | The external system owns that table; writing rows is what a misbehaving processor does |
+| Time passing | `TickingClock` replaces the injected `Clock` | Sleeping through the reconciliation grace window is slow and, on a loaded machine, flaky |
+
+The harness has **its own self-test**, and that is not paranoia: every scenario
+proves something by surviving an injected fault, so all of them would pass -
+falsely - if the fault were never injected. `ChaosHarnessTest` asserts that armed
+faults really do throw through queries the application makes, that the broker's
+three outcomes are genuinely distinct, and that the application reads the
+scenario's clock.
+
+### Why the broker is a fake here
+
+The scenarios test *our* handling of the broker contract, not the broker itself.
+Phase 4's `OutboxKafkaFlowIntegrationTest` keeps the real-broker proof, against a
+real Kafka container. Duplicating it here under a noisier harness would add
+runtime without adding evidence, while the states ChaosLab actually needs -
+accepted-but-unacknowledged above all - cannot be staged on a real broker at all.
+
+### Running the scenarios
+
+```powershell
+mvn test -D"test=*ChaosTest"
+```
+
+```powershell
+mvn test -D"test=ChaosHarnessTest"
+```
+
+> **PowerShell note:** quote the argument as `-D"test=..."`. Unquoted, PowerShell
+> expands the `*` before Maven sees it. The quoted form works in `cmd.exe` too;
+> in Git Bash use `-Dtest='*ChaosTest'`.
 
 ---
 
@@ -1220,8 +1330,9 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-146 tests across twenty classes — 108 example-based, and 38 jqwik properties
-that between them run tens of thousands of generated cases:
+168 tests across twenty-five classes — 108 example-based, 38 jqwik properties
+that between them run tens of thousands of generated cases, and 22 ChaosLab
+tests (15 fault-injection scenarios plus a 7-test harness self-test):
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -1251,6 +1362,17 @@ property-to-generator map):
 | `ReversalPropertyTest` | 5 | Postgres | exact negation, reverse-once, and reversal chains at arbitrary depth |
 | `TransactionSequencePropertyTest` | 3 | Postgres | whole chains of legal and illegal operations — where BUG-1 was found |
 | `EventReplayPropertyTest` | 4 | Postgres | at-least-once delivery, exactly-once effect |
+
+Phase 7 chaos scenarios (see [CHAOS_REPORT.md](CHAOS_REPORT.md) for what each one
+attacks and the invariant it asserts):
+
+| Class | Tests | Covers |
+|---|---|---|
+| `ChaosHarnessTest` | 7 | the harness itself: that injected faults are real and not silently inert |
+| `OutboxChaosTest` | 5 | broker down, ack lost, crash between send and mark, the dual-write gap itself, partial batch failure |
+| `DatabaseFaultChaosTest` | 4 | dropped connections and timeouts mid-payment, mid-refund and mid-reconciliation |
+| `DeliveryChaosTest` | 3 | duplicate, out-of-order and interleaved delivery against both consumers |
+| `ReconciliationChaosTest` | 3 | malformed external records, a truncated feed, an incomplete event payload |
 
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
@@ -1562,9 +1684,14 @@ money that moves — money still moves only through postings.
 
 ## Not in this phase
 
-ChaosLab, statistical signals and anything ML-shaped are out of scope for Phase 6
-and are not implemented. Property-based testing was the Phase 6 deliverable and
-now exists; see [Verification](#verification-phase-6).
+Statistical signals and anything ML-shaped are out of scope for Phase 7 and are
+not implemented. Property-based testing was the Phase 6 deliverable and ChaosLab
+the Phase 7 one; both now exist - see [Verification](#verification-phase-6) and
+[Resilience](#resilience-phase-7---chaoslab).
+
+ChaosLab's own coverage limits are deliberate and documented rather than implied:
+multi-instance network partitions, clock skew between nodes, disk exhaustion and
+lock contention under sustained load are not exercised.
 
 Two pieces of deliberate debt, both documented where they live:
 

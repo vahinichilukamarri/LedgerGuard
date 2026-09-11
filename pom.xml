@@ -98,6 +98,22 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!--
+                      A full run starts seven throwaway PostgreSQL containers and
+                      a Kafka broker, and Testcontainers stops them from JVM
+                      shutdown hooks after the tests have already passed. That
+                      legitimately takes longer than Surefire's 30-second default,
+                      which then kills the fork and prints an [ERROR] on a green
+                      build. The work is real, so it gets time rather than a
+                      workaround.
+                    -->
+                    <forkedProcessExitTimeoutInSeconds>180</forkedProcessExitTimeoutInSeconds>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

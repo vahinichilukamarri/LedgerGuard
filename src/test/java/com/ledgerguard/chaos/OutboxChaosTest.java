@@ -184,6 +184,56 @@ class OutboxChaosTest extends ChaosScenario {
     }
 
     /**
+     * SCENARIO 3b — the dual-write gap itself.
+     *
+     * <p>Scenario 3 kills the process between sending and recording the send.
+     * This kills it one step earlier and one layer deeper: between the ledger
+     * write and the outbox write, which is the gap the transactional outbox
+     * pattern exists to close.
+     *
+     * <p>In a system that published directly, this is where money moves and the
+     * announcement never happens — a loss no retry can recover, because nothing
+     * durable records that an event was ever owed. Here the outbox row is
+     * written by {@code OutboxRecorder} with {@code Propagation.MANDATORY},
+     * inside the caller's transaction, so failing that INSERT must take the
+     * whole payment down with it.
+     *
+     * <p>The assertion is therefore the opposite of the other scenarios: not
+     * "the ledger survived" but <b>"the ledger refused to survive alone"</b>.
+     */
+    @Test
+    @DisplayName("S3b: a payment cannot commit without its event; failing the outbox write rolls back the money")
+    void theLedgerCannotCommitWithoutItsEvent() {
+        UUID payer = createAccount("USD");
+        UUID payee = createAccount("USD");
+
+        LedgerInvariants.Snapshot before = invariants.snapshot();
+
+        database.failOnce(sql -> sql.contains("insert into outbox_events"),
+                ChaosDataSource.connectionDropped());
+
+        assertThatThrownBy(() -> pay(payer, payee, 9900L, "USD"))
+                .as("if the event cannot be recorded, the payment must not happen either")
+                .isNotNull();
+        assertThat(database.firedCount()).isEqualTo(1);
+        database.healthy();
+
+        // Not one row of it: no payment, no transaction, no postings, no event.
+        invariants.nothingWasWrittenSince(before).allHold();
+        assertThat(invariants.balanceMinorUnits(payer, "USD"))
+                .as("money must not have moved for an announcement that was never recorded")
+                .isZero();
+        assertThat(count("SELECT COUNT(*) FROM outbox_events")).isZero();
+
+        // And the retry is clean, leaving exactly one payment and one event.
+        pay(payer, payee, 9900L, "USD");
+        assertThat(count("SELECT COUNT(*) FROM payments")).isEqualTo(1);
+        assertThat(count("SELECT COUNT(*) FROM outbox_events")).isEqualTo(1);
+        assertThat(invariants.balanceMinorUnits(payer, "USD")).isEqualTo(-9900L);
+        invariants.allHold();
+    }
+
+    /**
      * SCENARIO 4 — one event in a batch is refused.
      *
      * <p>Attacks: batch handling. The failure must not take down the events
