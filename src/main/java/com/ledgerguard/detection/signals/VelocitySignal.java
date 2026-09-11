@@ -28,7 +28,7 @@ import java.util.List;
  * Because most accounts are quiet, and the normal approximation is worst when λ
  * is small. An account averaging 0.2 payments an hour that makes 3 scores 6.3 by
  * the approximation, which reads as extraordinary; the exact answer is
- * {@code p ≈ 0.0011}, surprisal 2.96 — just under the flagging line. The
+ * {@code p ≈ 0.00115}, surprisal 2.94 — just under the flagging line. The
  * approximation would have raised an alert the evidence does not support, and
  * would do so for every quiet account that had a mildly busy hour.
  */

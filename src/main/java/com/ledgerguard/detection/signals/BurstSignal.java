@@ -55,6 +55,19 @@ public class BurstSignal implements AnomalySignal {
      */
     private static final double MINIMUM_SPAN_SECONDS = 1e-6;
 
+    /**
+     * The smallest run of payments that counts as a cluster.
+     *
+     * <p>Three, not two. Every sample of events has a shortest gap between some
+     * pair of them, so a pair is not evidence of clustering — it is the
+     * definition of the minimum inter-arrival time, and scoring it means firing
+     * on the tightest pair in any history at all. Working the arithmetic through
+     * showed exactly that: two payments half an hour apart from an account
+     * averaging one a day scores 3.66 under a Poisson model and would have
+     * flagged, which is not a burst by any useful definition.
+     */
+    private static final int MINIMUM_CLUSTER = 3;
+
     @Override
     public Signal signal() {
         return Signal.BURST;
@@ -70,10 +83,10 @@ public class BurstSignal implements AnomalySignal {
         }
 
         List<AccountActivity.PaymentEvent> recent = activity.paymentsInRecentWindow();
-        if (recent.size() < 2) {
+        if (recent.size() < MINIMUM_CLUSTER) {
             return SignalScore.insufficientData(signal(),
-                    "%d payments in the recent window; clustering needs at least two"
-                            .formatted(recent.size()));
+                    "%d payments in the recent window; a cluster needs at least %d"
+                            .formatted(recent.size(), MINIMUM_CLUSTER));
         }
 
         double ratePerSecond = baseline.size() / (double) activity.baselineSpan().toSeconds();
@@ -86,7 +99,7 @@ public class BurstSignal implements AnomalySignal {
         // Every contiguous run of k payments, for every k. Contiguous in time
         // order is sufficient: the tightest window containing k events always
         // has an event at each end and none of the others in between.
-        for (int k = 2; k <= recent.size(); k++) {
+        for (int k = MINIMUM_CLUSTER; k <= recent.size(); k++) {
             for (int start = 0; start + k <= recent.size(); start++) {
                 double spanSeconds = Math.max(MINIMUM_SPAN_SECONDS,
                         seconds(recent.get(start).occurredAt(), recent.get(start + k - 1).occurredAt()));
