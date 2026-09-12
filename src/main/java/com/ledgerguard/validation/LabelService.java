@@ -6,7 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -62,8 +61,20 @@ public class LabelService {
      * retried submission returns the label that already exists instead of
      * writing a second one that would read as a reviewer disagreeing with
      * themselves.
+     *
+     * <p><b>Deliberately not {@code @Transactional}.</b> The first version was,
+     * and it did not work: a unique-index violation aborts the transaction it
+     * happens in, so the recovery query that went looking for the existing label
+     * ran inside an aborted transaction and failed with "current transaction is
+     * aborted" — turning a successful replay into a 500. Each repository call
+     * therefore gets its own transaction, and the failed insert rolls back
+     * without poisoning the lookup that follows it.
+     *
+     * <p>The check-then-insert is not atomic, and does not need to be: the
+     * partial unique index is what actually prevents a second verdict, and the
+     * catch below turns a lost race into the same replay a sequential retry
+     * gets.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public AccountLabel record(UUID accountId, Verdict verdict, String reviewer, Stratum stratum,
                                boolean scoresVisible, Instant labelledAsOf, String notes) {
         if (!accounts.existsById(accountId)) {
@@ -72,15 +83,19 @@ public class LabelService {
         Instant observedAt = Instant.now(clock);
         Instant about = labelledAsOf == null ? observedAt : labelledAsOf;
 
+        Optional<AccountLabel> alreadyRecorded = existing(accountId, reviewer, about);
+        if (alreadyRecorded.isPresent()) {
+            log.debug("label: replay from {} for account {}", reviewer, accountId);
+            return alreadyRecorded.get();
+        }
+
         try {
             return labels.saveAndFlush(AccountLabel.byReviewer(
                     accountId, verdict, reviewer, stratum, scoresVisible, about, observedAt, notes));
         } catch (DataIntegrityViolationException duplicate) {
-            // The partial unique index fired: this reviewer has already judged
-            // this account at this instant. A replay, not a conflict.
-            log.debug("label: replay from {} for account {}", reviewer, accountId);
-            return existing(accountId, reviewer, about)
-                    .orElseThrow(() -> duplicate);
+            // Two submissions raced. The index held; this one reads back the
+            // verdict the other wrote, in a transaction of its own.
+            return existing(accountId, reviewer, about).orElseThrow(() -> duplicate);
         }
     }
 

@@ -146,7 +146,25 @@ public class DisputeLabeller {
                 .count();
     }
 
-    private Optional<PayingAccount> payingAccount(String transactionId) {
+    /**
+     * The paying account behind an external reference, if there is one.
+     *
+     * <p>The reference arrives as free text because that is what a scheme sends,
+     * and {@code payments.transaction_id} is a {@code uuid}. Postgres will not
+     * compare the two, so the reference is parsed here rather than cast in SQL —
+     * a cast would throw on the junk reference, and a scheme sending a reference
+     * that means nothing to us is an ordinary event rather than an error. It is
+     * the chargeback equivalent of Phase 5's UNEXPECTED_EXTERNAL_TRANSACTION,
+     * and like that case it produces no record rather than a guessed one.
+     */
+    private Optional<PayingAccount> payingAccount(String transactionReference) {
+        UUID transactionId;
+        try {
+            transactionId = UUID.fromString(transactionReference);
+        } catch (IllegalArgumentException notOneOfOurs) {
+            return Optional.empty();
+        }
+
         List<PayingAccount> found = jdbc.query(PAYING_ACCOUNT,
                 (row, index) -> new PayingAccount(
                         UUID.fromString(row.getString("source_account_id")),
