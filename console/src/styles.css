@@ -233,8 +233,16 @@ table.ranking { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.ranking th, table.ranking td {
   text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--rule); vertical-align: top;
 }
-table.ranking thead th { font-size: 11px; color: var(--ink-soft); font-weight: 620; white-space: nowrap; }
-table.ranking thead th .th-note { display: block; font-weight: 400; color: var(--ink-faint); font-size: 10px; }
+table.ranking thead th { font-size: 11px; color: var(--ink-soft); font-weight: 620; white-space: normal; }
+
+/*
+ * Always its own line. These notes are the qualification attached to a number
+ * or a driver list, and run together on one line they read as a sentence
+ * fragment of whatever precedes them — "4 of 5well evidenced" being the case
+ * that caught it.
+ */
+.th-note { display: block; font-weight: 400; color: var(--ink-faint); font-size: 10.5px; line-height: 1.4; }
+table.ranking thead th .th-note { font-size: 10px; }
 table.ranking tbody tr:hover { background: var(--wash-neutral); }
 table.ranking button.sort {
   background: none; border: none; padding: 0; font: inherit; color: inherit;

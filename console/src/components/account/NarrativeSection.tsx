@@ -46,7 +46,7 @@ export function NarrativeSection({
   const sameText = preferred.data?.summary === template.summary;
 
   return (
-    <section className="card">
+    <section className="card" id="narrative">
       <h2>Narrative</h2>
       <p className="card-note">
         Prose, and the thing that wrote it, named. Whichever generator produced it, it restates the

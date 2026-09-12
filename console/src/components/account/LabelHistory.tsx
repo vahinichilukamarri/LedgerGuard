@@ -25,7 +25,7 @@ export function LabelHistory({ accountId }: { accountId: string }) {
   const query = useLabels(accountId);
 
   return (
-    <section className="card">
+    <section className="card" id="labels">
       <h2>Label and review status</h2>
       <p className="card-note">
         What somebody concluded, and what that conclusion is worth. Every verdict carries its

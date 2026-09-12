@@ -36,7 +36,7 @@ describe('displayAgreement', () => {
     const diluted = displayAgreement({
       agreement: 'ML_ONLY',
       corroborated: true,
-      modelDriversOutsideView: ['accountAgeDays'],
+      modelDriversOutsideView: ['log10SecondsSinceLastPayment'],
     });
 
     expect(diluted.state).toBe<DisplayState>('ML_ONLY_DILUTED');
@@ -48,7 +48,7 @@ describe('displayAgreement', () => {
     const outside = displayAgreement({
       agreement: 'ML_ONLY',
       corroborated: false,
-      modelDriversOutsideView: ['accountAgeDays'],
+      modelDriversOutsideView: ['log10SecondsSinceLastPayment'],
     });
     const sameAxis = displayAgreement({
       agreement: 'ML_ONLY',
@@ -57,7 +57,7 @@ describe('displayAgreement', () => {
     });
 
     expect(outside.state).toBe<DisplayState>('ML_ONLY_OUTSIDE_VIEW');
-    expect(outside.reading).toContain('accountAgeDays');
+    expect(outside.reading).toContain('log10SecondsSinceLastPayment');
     expect(sameAxis.state).toBe<DisplayState>('ML_ONLY_SAME_AXIS');
   });
 

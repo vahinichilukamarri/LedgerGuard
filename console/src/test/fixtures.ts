@@ -83,9 +83,9 @@ export function attribution(
 
 export const ATTRIBUTIONS: FeatureAttribution[] = [
   attribution('amountModifiedZ', { index: 0, value: 8.1, excessBits: 1.4, share: 0.62, percentile: 0.99, median: 1.1 }),
-  attribution('accountAgeDays', { index: 6, value: 3, excessBits: 0.6, share: 0.38, percentile: 0.02, median: 210 }),
+  attribution('log10SecondsSinceLastPayment', { index: 7, value: 6.9, excessBits: 0.6, share: 0.38, percentile: 0.99, median: 4.97 }),
   attribution('velocitySurprisal', { index: 1, value: 0.4, excessBits: 0, share: 0, percentile: 0.44, median: 0.5 }),
-  attribution('dataCompleteness', { index: 10, value: 0.6, excessBits: 0, share: 0, percentile: 0.31, median: 0.9 }),
+  attribution('dataCompleteness', { index: 10, value: 0.6, excessBits: 0, share: 0, percentile: 0.31, median: 1.0 }),
 ];
 
 // ---------------------------------------------------------------- list rows
@@ -123,8 +123,8 @@ export function assessment(
       agreement,
       corroborated: agreement === 'BOTH_ELEVATED',
       statisticalDrivers: ['amount_outlier', 'velocity'],
-      modelDrivers: agreement === null ? [] : ['amountModifiedZ', 'accountAgeDays'],
-      modelDriversOutsideStatisticalView: agreement === null ? [] : ['accountAgeDays'],
+      modelDrivers: agreement === null ? [] : ['amountModifiedZ', 'log10SecondsSinceLastPayment'],
+      modelDriversOutsideStatisticalView: agreement === null ? [] : ['log10SecondsSinceLastPayment'],
       detail: `/detection/accounts/${accountId}/explanation`,
     },
     ...overrides,
@@ -169,9 +169,9 @@ export function explanation(
         : {
             agreement,
             statisticalDrivers: ['amount_outlier', 'velocity'],
-            modelDrivers: ['amountModifiedZ', 'accountAgeDays'],
+            modelDrivers: ['amountModifiedZ', 'log10SecondsSinceLastPayment'],
             corroboratedSignals: corroborated ? ['amount_outlier'] : [],
-            modelDriversOutsideView: ['accountAgeDays'],
+            modelDriversOutsideView: ['log10SecondsSinceLastPayment'],
             corroborated,
             narrative:
               'The two layers are described here in the API’s own words, which differ per state.',

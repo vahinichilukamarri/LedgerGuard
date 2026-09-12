@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "mock": "node mock/server.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.59.0",

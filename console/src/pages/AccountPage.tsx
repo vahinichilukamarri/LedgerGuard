@@ -9,6 +9,7 @@ import { AttributionTable } from '../components/account/AttributionTable';
 import { NarrativeSection } from '../components/account/NarrativeSection';
 import { LabelHistory } from '../components/account/LabelHistory';
 import { humanise, instant, shortAccount } from '../components/uncertainty/format';
+import { useScrollToHash } from '../useScrollToHash';
 
 /**
  * Why one account scores what it scores.
@@ -35,6 +36,9 @@ export function AccountPage() {
   const compare = params.get('compare') === 'true';
 
   const query = useTemplateExplanation(accountId);
+
+  // Deep links to a section only work once that section exists.
+  useScrollToHash(query.isSuccess);
 
   if (query.isPending) {
     return <Pending what="the explanation for this account" />;
@@ -101,7 +105,7 @@ export function AccountPage() {
         </div>
       </section>
 
-      <section className="card">
+      <section className="card" id="agreement">
         <h2>How the two layers relate</h2>
         <p className="card-note">
           Stated rather than resolved. The state below is the API’s four-way verdict plus the
@@ -149,7 +153,7 @@ export function AccountPage() {
         )}
       </section>
 
-      <section className="card">
+      <section className="card" id="signals">
         <h2>What the statistical layer measured</h2>
         <p className="card-note">
           Each signal’s share of the composite. The shares sum to one whenever anything fired at
@@ -163,7 +167,7 @@ export function AccountPage() {
         </div>
       </section>
 
-      <section className="card">
+      <section className="card" id="attribution">
         <h2>What the model isolated on</h2>
         {ml ? (
           <AttributionTable ml={ml} />
