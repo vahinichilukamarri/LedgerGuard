@@ -21,6 +21,9 @@ set produces parameters that describe the label set.
 
 ## The headline finding
 
+> **Superseded in Phase 13.** The ceiling described below is real and was closed in Phase 13. The recall figures quoted later in this report, however, were measuring two defects in this phase's own benchmark rather than the ceiling: the anomalies aged out of both the recent and the baseline windows before anything was scored. Corrected, the benchmark gives a statistical recall of 1.000 under *both* aggregations. See [COMPOSITE_CEILING_FIX_REPORT.md](COMPOSITE_CEILING_FIX_REPORT.md).
+
+
 **Three of the five statistical signals must fire at saturation before a
 fully-measured account is elevated at all.**
 
@@ -289,6 +292,12 @@ warnings:
 ```
 
 ### Reading this honestly
+
+> **Corrected in Phase 13.** This figure is an artefact of how this benchmark was
+> built, not of the ceiling: nine of the ten anomalous accounts had no payments left
+> inside the recent window when they were scored, so the amount and burst signals
+> reported insufficient data. See
+> [COMPOSITE_CEILING_FIX_REPORT.md](COMPOSITE_CEILING_FIX_REPORT.md) §5.
 
 **The statistical layer missed nine of ten anomalies it was built to catch.**
 Not because the signals failed — the amount signal fired at saturation on every

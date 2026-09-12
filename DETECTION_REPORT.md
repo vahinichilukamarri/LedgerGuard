@@ -203,6 +203,9 @@ separately, and every state carries an explanation.
 
 ### The renormalisation trade
 
+> **Superseded in Phase 13.** The composite no longer renormalises over the applicable signals, and a lone applicable signal no longer reads 1.0. Phase 12 measured what renormalisation cost and Phase 13 replaced the aggregation with an unrenormalised power mean of degree three. The reasoning below is why the original choice was made, and is kept because the argument it makes at degree one is correct. See [COMPOSITE_CEILING_FIX_REPORT.md](COMPOSITE_CEILING_FIX_REPORT.md).
+
+
 Dividing by the applicable weight rather than the total is a real trade-off, made
 in the open. Without it, an account with two measurable signals could never
 exceed 0.45 however extreme its behaviour, and thin-history accounts — where a

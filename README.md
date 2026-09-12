@@ -2,13 +2,15 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 12 — Validation.** Labels finally exist: an independent
-dispute feed, a stratified human review queue with blind labelling, and an
-evaluation harness that scores every account *as of the moment its label
-describes*. It found something. **Three of the five statistical signals must
-fire at saturation before a fully-measured account can be flagged at all** — so
-the composite is easier to trip with less evidence than with more, which is the
-opposite of the intent. Nothing was tuned in response, deliberately. See
+**Current phase: Phase 13 — Composite Ceiling Fix.** Phase 12 found that the
+composite could not flag an account on one signal, however extreme, once three
+of the five were measurable. The aggregation is now an unrenormalised weighted
+power mean of degree three, and **any single saturated signal elevates any
+account** — with the exponent derived from the existing weights rather than
+chosen. Re-running Phase 12's benchmark also found two defects in that
+benchmark, so one of its published figures was measuring the fixture rather
+than the detector. See
+[COMPOSITE_CEILING_FIX_REPORT.md](COMPOSITE_CEILING_FIX_REPORT.md),
 [VALIDATION_REPORT.md](VALIDATION_REPORT.md),
 [LLM_EXPLANATION_REPORT.md](LLM_EXPLANATION_REPORT.md),
 [EXPLANATION_REPORT.md](EXPLANATION_REPORT.md),
@@ -29,8 +31,9 @@ opposite of the intent. Nothing was tuned in response, deliberately. See
 | 10 — Explanation Layer | `v0.10-explanation` | Signal contributions that sum to the composite, isolation-bit attribution for the forest, disagreement between the layers made legible, and template-generated summaries. No new detection. |
 | 11 — LLM-Backed Explanation | `v0.11-explanation-llm` | Narratives written by a Groq-hosted model from a closed evidence payload, validated name-by-name and number-by-number before serving, with the Phase 10 templates as a silent fallback. No new detection, no change to any score. |
 | 12 — Validation | `v0.12-validation` | Labels from an independent dispute feed and a stratified blind review queue, plus a leakage-safe evaluation harness. Measures the detector without tuning it, and found a structural ceiling in the Phase 8 composite. |
+| 13 — Composite Ceiling Fix | `v0.13-ceiling-fix` | The aggregation replaced with an unrenormalised weighted power mean of degree three, closing the ceiling and removing the thin-vs-measured inversion. No weight or threshold tuned, no signal or model changed. |
 
-Nothing beyond those twelve phases is implemented.
+Nothing beyond those thirteen phases is implemented.
 
 ---
 
@@ -1835,6 +1838,113 @@ them will quote precision from thirty accounts as a property of the detector.
 
 ---
 
+## The composite ceiling fix (Phase 13)
+
+Phase 12 found that the composite could not flag an account on one signal
+however extreme it was. This phase characterises that exactly, replaces the
+aggregation, and reports what it did and did not change.
+
+Full detail in
+[COMPOSITE_CEILING_FIX_REPORT.md](COMPOSITE_CEILING_FIX_REPORT.md).
+
+### The defect, enumerated rather than sampled
+
+All 31 applicable sets against every saturating subset:
+
+| Applicable | Min saturated to flag | Can one signal ever flag? |
+|---|---|---|
+| 1 | 1 of 1 (composite read **1.00**) | yes |
+| 2 | 1 of 2 | yes |
+| 3 | 2 of 3 | **no** |
+| 4 | 2 of 4 | **no** |
+| 5 | 3 of 5 | **no** |
+
+A cliff, not a ramp — and it falls one signal earlier than Phase 12 implied.
+Four applicable needs two, not three. The property that matters: a single
+signal's ability to flag an account **vanished the moment a third signal became
+measurable**, so accruing history could only ever lower an account's composite.
+
+### The fix
+
+```
+composite = ( Σ over applicable signals of  wᵢ · sᵢ³ ) ^ ⅓
+```
+
+A weighted power mean of degree three, **unrenormalised**.
+
+**The exponent is derived, not chosen.** The guarantee "any one saturated signal
+elevates any account" needs `w_min^(1/p) ≥ 0.50`; with the lightest weight at
+0.15 that is `p ≥ ln(0.15)/ln(0.50) = 2.74`, so three is the smallest integer
+that works. Change a weight or the threshold and the derivation moves with them.
+No new unfitted constant enters the system.
+
+**Dropping renormalisation is the load-bearing half.** Phase 8 renormalised
+because otherwise a two-signal account "could never exceed 0.45 however extreme"
+— true at degree one. At degree three two saturated signals reach 0.766 unaided,
+so the power transform already does that job and keeping both compensates twice,
+which is what recreated the inversion.
+
+Only this candidate has a *flat* difficulty curve. A renormalised power mean
+closes the ceiling too but leaves thin accounts easier to flag than
+fully-measured ones, which was Phase 12's actual complaint.
+
+### What the number means now
+
+- It is a function of **what fired**, not of what fraction of the measurable
+  evidence fired. Completeness lives in `applicableSignals` / `wellEvidenced`,
+  which have travelled beside the score since Phase 8 for exactly this purpose.
+- A thin account **caps below 1.0** — two saturated signals reach 0.766.
+- Phase 8's documented pathology is retired: one applicable signal, saturated,
+  read **1.00** and now reads **0.63**.
+- Phase 10's `sum(contribution) == composite` becomes **shares summing to 1.0**,
+  because the parts of a power mean sum to the composite cubed. Still exact,
+  and it now matches the language the ML attribution already used.
+
+### Thin history did not get easier
+
+Stating this honestly took a failing test first — one pair *did* get easier
+(0.900 → 0.794). The true property is the floor:
+
+| | Cheapest single-signal score that flags anything |
+|---|---|
+| Legacy | **0.500** (one applicable signal) |
+| Phase 13 | **0.794** (every configuration) |
+
+An account with almost no history used to be the cheapest in the system to flag.
+That floor rose by nearly sixty per cent and is now identical everywhere.
+
+### Two defects in Phase 12's benchmark
+
+Re-running it to measure the fix found that the benchmark had been measuring
+itself. The bursts were created inside the per-account loop, which then advanced
+the clock 150 hours, so nine of the ten anomalies had **no payments left in the
+recent window** when scored. Histories were also built one account at a time,
+pushing the earliest outside the **thirty-day baseline**.
+
+Corrected, statistical recall goes 0.100 → 1.000 — and none of that is the
+aggregation. Scored through both functions on identical signal outputs: **10/10
+either way.**
+
+That is the honest result. The ceiling bites from three applicable signals
+upward, and an account anomalous on one axis has *two* — burst needs three
+recent payments, the rate signals need ten recent transactions. Reaching the
+ceiling on a real ledger needs a high-volume account making one out-of-character
+payment, which would take ~7,000 baseline payments to simulate. So the fix is
+proven where it can be proven exactly, from the weights alone, and the
+ledger-level test records the boundary rather than being contorted until the
+number moves.
+
+### The caveat
+
+> Nothing here validates the detector. This phase fixed a defect in how evidence
+> is **combined**; it did not establish that the evidence is any good. The
+> weights remain unfitted judgement, and the exponent is derived *from* them, so
+> it inherits their arbitrariness exactly. No weight or threshold was tuned
+> against Phase 12's labels — that stays deferred, and still gated on label
+> volume.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -1945,11 +2055,11 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-526 tests across fifty-four classes — 108 example-based, 38 jqwik properties
+536 tests across fifty-four classes — 108 example-based, 38 jqwik properties
 that between them run tens of thousands of generated cases, 22 ChaosLab tests (15
 fault-injection scenarios plus a 7-test harness self-test), 65 statistical
 detection tests, 47 ML detection tests, 101 explanation tests, 87 LLM narrative
-tests and 58 validation tests:
+tests and 68 validation tests (including the Phase 13 ceiling characterisation):
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -2045,8 +2155,8 @@ Phase 12 validation tests (see [VALIDATION_REPORT.md](VALIDATION_REPORT.md)):
 | `ConfusionMatrixTest` | 6 | precision, recall, base rate and lift, and every undefined quantity refusing to be zero |
 | `PrecisionRecallCurveTest` | 9 | perfect, inverted and random rankings; ties; weights; average precision against chance |
 | `AccountLabelTest` | 9 | what a label must say about itself before it is allowed to exist |
-| `CompositeCeilingTest` | 9 | the structural finding: three of five signals required, and thin evidence being easier to flag |
-| `ValidationFlowIntegrationTest` | 18 | leakage-safe scoring, recall refused without an audit stratum, dispute maturity, weighting, and the synthetic benchmark |
+| `CompositeCeilingTest` | 18 | the ceiling closed over all 31 applicable sets, the inversion gone, the exponent's derivation, and the floor that guards thin history |
+| `ValidationFlowIntegrationTest` | 19 | leakage-safe scoring, recall refused without an audit stratum, dispute maturity, weighting, the corrected benchmark and the aggregation before/after |
 
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
@@ -2399,15 +2509,17 @@ phase this one argues for and deliberately refuses to be.
 
 Property-based testing was the Phase 6 deliverable, ChaosLab the Phase 7 one, the
 statistical signal layer the Phase 8 one, the Isolation Forest the Phase 9 one
-the explanation layer the Phase 10 one, the LLM narratives the Phase 11 one and
-the validation harness the Phase 12 one; all seven now exist - see
+the explanation layer the Phase 10 one, the LLM narratives the Phase 11 one, the
+validation harness the Phase 12 one and the aggregation fix the Phase 13 one;
+all eight now exist - see
 [Verification](#verification-phase-6),
 [Resilience](#resilience-phase-7---chaoslab),
 [Detection](#detection-phase-8---statistical),
 [Machine learning](#machine-learning-phase-9---isolation-forest),
 [Explanation](#explanation-phase-10),
-[LLM narratives](#llm-narratives-phase-11---groqcloud) and
-[Validation](#validation-phase-12---labels).
+[LLM narratives](#llm-narratives-phase-11---groqcloud),
+[Validation](#validation-phase-12---labels) and
+[The composite ceiling fix](#the-composite-ceiling-fix-phase-13).
 
 Each layer's coverage limits are deliberate and documented rather than implied.
 ChaosLab does not exercise multi-instance network partitions, clock skew between

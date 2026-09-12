@@ -77,7 +77,14 @@ exactly two new numbers per signal:
 | `effectiveWeight` | the signal's fixed weight renormalised over the signals that could judge |
 | `contribution` | `effectiveWeight × score` — the composite points this signal actually supplied |
 
+> **Superseded in Phase 13.** `effectiveWeight` no longer exists: the composite
+> does not renormalise, so there is nothing for it to be a fraction of.
+> `contribution` is now this signal's **share** of the score, in `[0,1]`.
+
 ### The identity that makes it an explanation
+
+> **Superseded in Phase 13.** The parts of Phase 13's power mean sum to the composite cubed, so contributions are now published as shares summing to 1.0. The identity is still exact and still pinned by a test; only its form changed. See [COMPOSITE_CEILING_FIX_REPORT.md](COMPOSITE_CEILING_FIX_REPORT.md).
+
 
 ```
 sum(contribution) == composite
