@@ -8,6 +8,12 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
@@ -166,5 +172,147 @@ class CompositeCeilingTest {
             }
         }
         return descending.length;
+    }
+
+    // ------------------------------------------------- exhaustive sweep
+
+    /**
+     * Every applicable set crossed with every saturating subset: 31 x 2^k
+     * combinations, which is small enough to enumerate and large enough that
+     * spot-checking two extremes was always going to miss something.
+     *
+     * <p>Phase 12 reported the endpoints — five applicable needs three, thin
+     * needs fewer — and the sweep shows the shape between them is not a ramp.
+     * It is a cliff, and it falls one signal earlier than the report implied.
+     */
+    @Test
+    @DisplayName("the minimum saturating count, for every applicable set there is")
+    void exhaustiveCharacterisation() {
+        Map<Integer, Set<Integer>> minimumByApplicableCount = new TreeMap<>();
+
+        for (Set<Signal> applicable : nonEmptySubsets()) {
+            minimumByApplicableCount
+                    .computeIfAbsent(applicable.size(), key -> new TreeSet<>())
+                    .add(minimumSaturatingToFlag(applicable));
+        }
+
+        // One number per applicable count: within a size, every set agrees.
+        assertThat(minimumByApplicableCount.get(1)).containsExactly(1);
+        assertThat(minimumByApplicableCount.get(2)).containsExactly(1);
+        assertThat(minimumByApplicableCount.get(3)).containsExactly(2);
+        assertThat(minimumByApplicableCount.get(4))
+                .as("the non-obvious one: four applicable needs two, not three")
+                .containsExactly(2);
+        assertThat(minimumByApplicableCount.get(5)).containsExactly(3);
+    }
+
+    /**
+     * The cliff, stated as the property that actually matters operationally.
+     *
+     * <p>It is not "a fully-measured account is hard to flag". It is that the
+     * ability of a single signal to flag an account <b>disappears entirely the
+     * moment a third signal becomes measurable</b>, and no extremity recovers
+     * it. An account with two applicable signals is flagged by one of them; the
+     * same account, after enough history accrues for a third signal to have an
+     * opinion, cannot be.
+     */
+    @Test
+    @DisplayName("one saturated signal suffices at two applicable and never at three")
+    void theCliffIsAtThreeApplicableSignals() {
+        for (Set<Signal> applicable : nonEmptySubsets()) {
+            boolean oneIsEnough = minimumSaturatingToFlag(applicable) == 1;
+
+            assertThat(oneIsEnough)
+                    .as("%d applicable (%s): one saturated signal %s flag",
+                            applicable.size(), wireNames(applicable),
+                            applicable.size() <= 2 ? "must" : "must not")
+                    .isEqualTo(applicable.size() <= 2);
+        }
+    }
+
+    /**
+     * Accruing history can only ever lower an account's composite, never raise
+     * it, holding behaviour fixed. A signal that gains enough data to say
+     * "nothing unusual here" enlarges the denominator and dilutes the ones that
+     * are shouting.
+     */
+    @Test
+    @DisplayName("a signal becoming measurable can only push the composite down")
+    void moreEvidenceOnlyDilutes() {
+        Set<Signal> pair = EnumSet.of(Signal.AMOUNT_OUTLIER, Signal.VELOCITY);
+        Set<Signal> withAThird = EnumSet.of(
+                Signal.AMOUNT_OUTLIER, Signal.VELOCITY, Signal.BURST);
+
+        double before = composite(pair, EnumSet.of(Signal.AMOUNT_OUTLIER));
+        double after = composite(withAThird, EnumSet.of(Signal.AMOUNT_OUTLIER));
+
+        assertThat(before).isGreaterThan(after);
+        assertThat(before).isGreaterThanOrEqualTo(Agreement.STATISTICAL_ELEVATED);
+        assertThat(after)
+                .as("the account did nothing differently; a third signal merely learned to speak")
+                .isLessThan(Agreement.STATISTICAL_ELEVATED);
+    }
+
+    /**
+     * The pathology Phase 8 documented and accepted: one applicable signal,
+     * saturated, reports total certainty.
+     */
+    @Test
+    @DisplayName("a lone applicable signal saturating reports a composite of 1.0")
+    void aSingleApplicableSignalReportsCertainty() {
+        for (Signal signal : Signal.values()) {
+            assertThat(composite(EnumSet.of(signal), EnumSet.of(signal)))
+                    .as("%s alone", signal.wireName())
+                    .isEqualTo(1.0);
+        }
+    }
+
+    // ------------------------------------------------------------- helpers
+
+    /** Phase 8's aggregation, as arithmetic: the weighted mean over what applies. */
+    private static double composite(Set<Signal> applicable, Set<Signal> saturating) {
+        double applicableWeight = applicable.stream().mapToDouble(Signal::weight).sum();
+        double firing = applicable.stream()
+                .filter(saturating::contains)
+                .mapToDouble(Signal::weight)
+                .sum();
+        return applicableWeight == 0 ? 0 : firing / applicableWeight;
+    }
+
+    /** Fewest saturated signals that flag this applicable set, heaviest first. */
+    private static int minimumSaturatingToFlag(Set<Signal> applicable) {
+        List<Signal> heaviestFirst = applicable.stream()
+                .sorted(java.util.Comparator.comparingDouble(Signal::weight).reversed())
+                .toList();
+
+        Set<Signal> saturating = EnumSet.noneOf(Signal.class);
+        for (int count = 0; count < heaviestFirst.size(); count++) {
+            saturating.add(heaviestFirst.get(count));
+            if (composite(applicable, saturating) >= Agreement.STATISTICAL_ELEVATED) {
+                return count + 1;
+            }
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    /** All 31 non-empty applicable sets. */
+    private static List<Set<Signal>> nonEmptySubsets() {
+        List<Set<Signal>> subsets = new java.util.ArrayList<>();
+        Signal[] all = Signal.values();
+
+        for (int mask = 1; mask < (1 << all.length); mask++) {
+            Set<Signal> subset = EnumSet.noneOf(Signal.class);
+            for (int bit = 0; bit < all.length; bit++) {
+                if ((mask & (1 << bit)) != 0) {
+                    subset.add(all[bit]);
+                }
+            }
+            subsets.add(subset);
+        }
+        return subsets;
+    }
+
+    private static String wireNames(Set<Signal> signals) {
+        return signals.stream().map(Signal::wireName).collect(java.util.stream.Collectors.joining(","));
     }
 }
