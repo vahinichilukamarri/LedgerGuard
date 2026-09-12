@@ -92,7 +92,8 @@ public final class SummaryWriter {
 
         String named = drivers.stream()
                 .limit(NAMED_DRIVERS)
-                .map(driver -> "%s (%.2f of the composite)".formatted(driver.signal(), driver.contribution()))
+                .map(driver -> "%s (%.0f%% of the score)"
+                        .formatted(driver.signal(), driver.contribution() * 100))
                 .reduce((left, right) -> left + " and " + right)
                 .orElse("");
 
@@ -140,8 +141,8 @@ public final class SummaryWriter {
         caveats.add("The statistical weights are unfitted judgement, not learned parameters.");
 
         if (!statistical.wellEvidenced()) {
-            caveats.add(("The composite rests on %d applicable signal(s). Below two, renormalisation "
-                    + "can turn a single firing signal into a high composite on thin evidence.")
+            caveats.add(("The composite rests on %d applicable signal(s), so most of the evidence "
+                    + "this system can gather was never available for this account.")
                     .formatted(statistical.applicableSignals()));
         }
         if (!statistical.unmeasurable().isEmpty()) {

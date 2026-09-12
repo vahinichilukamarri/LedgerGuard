@@ -75,7 +75,7 @@ class SummaryWriterTest {
         assertThat(summary)
                 .contains("burst")
                 .contains("velocity")
-                .contains("of the composite");
+                .contains("of the score");
     }
 
     @Test

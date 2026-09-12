@@ -106,10 +106,10 @@ class NarrativeValidatorTest {
     @Test
     @DisplayName("a truthful rounding of an evidence value is allowed")
     void roundedRenderingPasses() {
-        // The composite is 0.8 exactly here, so 0.80 and 0.8 are the same claim
-        // written two ways; a validator that rejected the second would reject
-        // correct prose for choosing a different number of digits.
-        assertThat(validate(LlmFixtures.VALID_NARRATIVE.replace("is 0.8 over", "is 0.80 over"))
+        // The composite rounds to 0.63 in the evidence, so 0.63 and 0.630 are
+        // the same claim written two ways; a validator that rejected the second
+        // would reject correct prose for choosing a different number of digits.
+        assertThat(validate(LlmFixtures.VALID_NARRATIVE.replace("is 0.63 over", "is 0.630 over"))
                 .valid()).isTrue();
     }
 
@@ -137,8 +137,8 @@ class NarrativeValidatorTest {
                         "n/a"));
 
         String narrative = """
-                The statistical composite is 0.8 over 1 applicable signal, driven by amount_outlier \
-                at 0.8 of the composite. The model scores 0.9 against 120 training accounts and \
+                The statistical composite is 0.63 over 1 applicable signal, driven by amount_outlier \
+                at 100% of the score. The model scores 0.9 against 120 training accounts and \
                 isolated this account on log10SecondsSinceLastPayment, 100% of the isolation at the \
                 99th percentile. Both layers are elevated.""";
 

@@ -161,17 +161,22 @@ class ReconciliationTest {
     }
 
     /**
-     * Not every ML_ONLY row is a disagreement. A signal can fire at full
-     * strength and still leave the composite quiet, because the composite is a
-     * weighted mean — and reporting that as "the statistical layer did not see
-     * it" would be wrong about a signal that saw it perfectly well.
+     * Not every ML_ONLY row is a disagreement: a signal can fire and still leave
+     * the composite quiet, and reporting that as "the statistical layer did not
+     * see it" would be wrong about a signal that saw it perfectly well.
+     *
+     * <p>Phase 13 narrowed this case sharply. It used to arise with a signal at
+     * <em>full saturation</em>, because the weighted mean could not carry one
+     * signal over the threshold however loud it was — that was the composite
+     * ceiling, and it is now closed. Dilution requires a signal that is firing
+     * but not saturated, which is what this fixture uses: a mismatch surprisal
+     * of 6.0, three-fifths of the way up its scale.
      */
     @Test
-    @DisplayName("ML_ONLY where the matching signal fired but was averaged down says dilution")
+    @DisplayName("ML_ONLY where the matching signal fired but did not carry the score")
     void mlOnlyByDilution() {
         Map<Signal, Double> statistics = new EnumMap<>(Signal.class);
-        statistics.put(Signal.RECONCILIATION_MISMATCH_RATE,
-                Signal.RECONCILIATION_MISMATCH_RATE.saturation());
+        statistics.put(Signal.RECONCILIATION_MISMATCH_RATE, 6.0);
         statistics.put(Signal.AMOUNT_OUTLIER, 0.0);
         statistics.put(Signal.VELOCITY, 0.0);
         statistics.put(Signal.REFUND_REVERSAL_RATE, 0.0);
@@ -182,15 +187,14 @@ class ReconciliationTest {
                 statistical, ExplanationFixtures.mlExplanation(ELEVATED_ML, "mismatchSurprisal"));
 
         assertThat(statistical.composite())
-                .as("one signal at full strength among four applicable ones cannot exceed "
-                        + "its own effective weight")
+                .as("a partially firing signal does not carry the composite by itself")
                 .isLessThan(Agreement.STATISTICAL_ELEVATED);
         assertThat(reconciliation.agreement()).isEqualTo(Agreement.ML_ONLY);
         assertThat(reconciliation.corroborated()).isTrue();
         assertThat(reconciliation.narrative())
                 .contains("reconciliation_mismatch_rate did fire")
-                .contains("weighted mean over 4 applicable signals")
-                .contains("the statistical score is diluted");
+                .contains("over 4 applicable signals")
+                .contains("did not carry it over the line");
     }
 
     @Test

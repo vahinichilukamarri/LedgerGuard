@@ -1,6 +1,7 @@
 package com.ledgerguard.detection.explain;
 
 import com.ledgerguard.detection.AnomalyScore;
+import com.ledgerguard.detection.CompositeAggregation;
 import com.ledgerguard.detection.Signal;
 import com.ledgerguard.detection.SignalScore;
 import com.ledgerguard.detection.ml.FeatureAttribution;
@@ -45,8 +46,6 @@ public final class ExplanationFixtures {
      */
     public static AnomalyScore score(Map<Signal, Double> statistics) {
         List<SignalScore> scores = new ArrayList<>();
-        double weighted = 0;
-        double applicableWeight = 0;
 
         for (Signal signal : Signal.values()) {
             Double statistic = statistics.get(signal);
@@ -54,22 +53,33 @@ public final class ExplanationFixtures {
                 scores.add(SignalScore.insufficientData(signal, "not part of this fixture"));
                 continue;
             }
-            SignalScore score = SignalScore.of(signal, statistic, "fixture statistic " + statistic);
-            scores.add(score);
-            weighted += signal.weight() * score.score();
-            applicableWeight += signal.weight();
+            scores.add(SignalScore.of(signal, statistic, "fixture statistic " + statistic));
         }
 
-        double composite = applicableWeight == 0 ? 0 : weighted / applicableWeight;
-        return new AnomalyScore(ACCOUNT, AS_OF, composite, statistics.size(), scores);
+        // Through the real aggregation rather than a copy of it. Phase 13
+        // changed the function underneath this fixture, and a hand-rolled
+        // formula here would have gone on producing composites the system no
+        // longer computes.
+        return new AnomalyScore(ACCOUNT, AS_OF, CompositeAggregation.combine(scores),
+                statistics.size(), scores);
     }
 
-    /** A score whose composite lands where the caller needs it, on one signal. */
+    /**
+     * A score whose composite lands where the caller needs it, on one signal.
+     *
+     * <p>With only {@code AMOUNT_OUTLIER} applicable the composite is
+     * {@code cbrt(weight) * score}, so a target is still one inversion away —
+     * but the reachable range now caps at {@code cbrt(0.25) = 0.63}. Anything
+     * above that saturates the signal and lands at the cap, which is a real
+     * property of the Phase 13 aggregation rather than a fixture limitation:
+     * one signal is no longer allowed to assert certainty.
+     */
     public static AnomalyScore statisticalScore(double composite) {
-        // AMOUNT_OUTLIER alone is applicable, so the composite is that signal's
-        // normalised score exactly and a target composite is one inversion away.
+        double reachable = Math.cbrt(Signal.AMOUNT_OUTLIER.weight());
+        double normalised = Math.min(1.0, composite / reachable);
+
         double statistic = Signal.AMOUNT_OUTLIER.threshold()
-                + composite * (Signal.AMOUNT_OUTLIER.saturation() - Signal.AMOUNT_OUTLIER.threshold());
+                + normalised * (Signal.AMOUNT_OUTLIER.saturation() - Signal.AMOUNT_OUTLIER.threshold());
         Map<Signal, Double> statistics = new EnumMap<>(Signal.class);
         statistics.put(Signal.AMOUNT_OUTLIER, statistic);
         return score(statistics);

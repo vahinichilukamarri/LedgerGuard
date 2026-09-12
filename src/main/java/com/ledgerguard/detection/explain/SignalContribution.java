@@ -1,5 +1,6 @@
 package com.ledgerguard.detection.explain;
 
+import com.ledgerguard.detection.CompositeAggregation;
 import com.ledgerguard.detection.Signal;
 import com.ledgerguard.detection.SignalScore;
 
@@ -11,24 +12,36 @@ import java.util.UUID;
  *
  * <h2>What this adds to the Phase 8 breakdown</h2>
  *
- * Two numbers, and only two. {@link SignalScore} already carries the statistic,
- * the normalised score, the applicability and a sentence of prose; that is not
- * rebuilt here, it is wrapped. What it cannot carry is how much of <em>this
- * account's</em> composite the signal supplied, because that depends on which
- * other signals were applicable — the same signal at the same score contributes
- * 0.25 of a five-signal composite and 0.56 of a two-signal one.
+ * One number. {@link SignalScore} already carries the statistic, the normalised
+ * score, the applicability and a sentence of prose; that is not rebuilt here, it
+ * is wrapped. What it cannot carry is how much of <em>this account's</em> score
+ * the signal supplied, because that depends on what the other signals did.
  *
- * <p>So {@link #effectiveWeight} is the signal's weight renormalised over the
- * applicable set, and {@link #contribution} is {@code effectiveWeight x score}:
- * the points of composite this signal actually put on the board. They sum,
- * across all five, to the composite exactly, which is the property that makes
- * the breakdown an explanation rather than a list of numbers that happen to
- * appear nearby.
+ * <h2>A share, since Phase 13</h2>
  *
- * @param weight          the fixed, unfitted weight from {@link Signal}
- * @param effectiveWeight that weight as a share of the applicable weight; zero
- *                        for a signal that could not judge
- * @param contribution    {@code effectiveWeight x score}, in composite points
+ * Through Phases 10 to 12 this was {@code effectiveWeight x score}, in composite
+ * points, and the five of them summed to the composite exactly. That identity
+ * was a property of the weighted arithmetic mean, and Phase 13 replaced that
+ * mean with a power mean of degree three, so it no longer holds: the parts now
+ * sum to the composite <em>cubed</em>.
+ *
+ * <p>Rather than publish a quantity in a cubed space nobody has intuitions
+ * about, {@link #contribution} is that part as a <b>share of the total</b>. The
+ * new identity is that the shares sum to one, which is exact, and which reads
+ * the way a reviewer wants to read it: this signal supplied seventy per cent of
+ * the score. It also matches the language Phase 10's ML attribution has used for
+ * its own drivers since it was written, so the two halves of an explanation
+ * finally speak the same way.
+ *
+ * <p>{@code effectiveWeight} is gone with the mean that defined it. There is no
+ * renormalisation any more, so a weight-as-a-fraction-of-the-applicable-weight
+ * is a number that no longer participates in anything, and keeping it would have
+ * left a field that looks like it drives the score and does not.
+ *
+ * @param weight       the fixed, unfitted weight from {@link Signal}
+ * @param contribution this signal's share of the score, in {@code [0,1]}. Zero
+ *                     for a signal that did not fire; across all five they sum
+ *                     to one whenever anything fired at all
  */
 public record SignalContribution(
         String signal,
@@ -37,15 +50,18 @@ public record SignalContribution(
         Double statistic,
         double score,
         double weight,
-        double effectiveWeight,
         double contribution,
         String explanation,
         UUID subjectId) {
 
-    static SignalContribution of(SignalScore score, double applicableWeight) {
-        double effectiveWeight = score.applicable() && applicableWeight > 0
-                ? score.signal().weight() / applicableWeight
-                : 0.0;
+    /**
+     * @param totalPart the sum of {@link CompositeAggregation#part} across every
+     *                  signal, which is the composite cubed. Zero when nothing
+     *                  fired, in which case every share is zero rather than
+     *                  undefined
+     */
+    static SignalContribution of(SignalScore score, double totalPart) {
+        double share = totalPart > 0 ? CompositeAggregation.part(score) / totalPart : 0.0;
 
         return new SignalContribution(
                 score.signal().wireName(),
@@ -54,8 +70,7 @@ public record SignalContribution(
                 Double.isNaN(score.statistic()) ? null : score.statistic(),
                 score.score(),
                 score.signal().weight(),
-                effectiveWeight,
-                effectiveWeight * score.score(),
+                share,
                 score.explanation(),
                 score.subjectId());
     }

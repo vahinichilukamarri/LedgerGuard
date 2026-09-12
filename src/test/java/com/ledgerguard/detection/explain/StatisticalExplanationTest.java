@@ -31,8 +31,8 @@ class StatisticalExplanationTest {
     private static final double TOLERANCE = 1e-12;
 
     @Test
-    @DisplayName("contributions sum to the composite, exactly")
-    void contributionsSumToTheComposite() {
+    @DisplayName("contributions sum to one, exactly")
+    void contributionsSumToOne() {
         Map<Signal, Double> statistics = new EnumMap<>(Signal.class);
         statistics.put(Signal.AMOUNT_OUTLIER, 7.0);
         statistics.put(Signal.VELOCITY, 5.5);
@@ -45,35 +45,53 @@ class StatisticalExplanationTest {
                 .mapToDouble(SignalContribution::contribution)
                 .sum();
 
-        assertThat(summed).isCloseTo(explanation.composite(), within(TOLERANCE));
+        // Phases 10 to 12 asserted this summed to the composite, which held
+        // while the composite was a weighted arithmetic mean. Phase 13's power
+        // mean has parts that sum to the composite cubed, so the breakdown
+        // publishes shares and the identity is that shares sum to one.
+        assertThat(summed).isCloseTo(1.0, within(TOLERANCE));
     }
 
+    /**
+     * Rewritten in Phase 13. This pair used to assert that a signal's
+     * contribution grew when fewer signals could judge, which was the
+     * renormalisation showing through — and the mechanism behind the composite
+     * ceiling. The contribution is now a share of what actually fired, so it
+     * moves with the other signals' <em>scores</em> and not with their
+     * measurability.
+     */
     @Test
-    @DisplayName("the same signal contributes more when fewer signals could judge")
-    void renormalisationIsVisible() {
+    @DisplayName("a share moves with what else fired, not with what else could be measured")
+    void sharesDependOnFiringNotMeasurability() {
         Map<Signal, Double> alone = new EnumMap<>(Signal.class);
         alone.put(Signal.AMOUNT_OUTLIER, 7.0);
 
-        Map<Signal, Double> crowded = new EnumMap<>(alone);
-        crowded.put(Signal.VELOCITY, 5.5);
-        crowded.put(Signal.BURST, 4.0);
+        Map<Signal, Double> quietCompany = new EnumMap<>(alone);
+        quietCompany.put(Signal.VELOCITY, 0.0);
+        quietCompany.put(Signal.BURST, 0.0);
 
-        double aloneContribution = contributionOf(
+        Map<Signal, Double> loudCompany = new EnumMap<>(alone);
+        loudCompany.put(Signal.VELOCITY, 5.5);
+        loudCompany.put(Signal.BURST, 4.0);
+
+        double onlyApplicable = contributionOf(
                 StatisticalExplanation.of(ExplanationFixtures.score(alone)), "amount_outlier");
-        double crowdedContribution = contributionOf(
-                StatisticalExplanation.of(ExplanationFixtures.score(crowded)), "amount_outlier");
+        double withQuietNeighbours = contributionOf(
+                StatisticalExplanation.of(ExplanationFixtures.score(quietCompany)), "amount_outlier");
+        double withLoudNeighbours = contributionOf(
+                StatisticalExplanation.of(ExplanationFixtures.score(loudCompany)), "amount_outlier");
 
-        assertThat(aloneContribution)
-                .as("the whole composite rests on it when nothing else could judge")
-                .isGreaterThan(crowdedContribution);
-        assertThat(effectiveWeightOf(
-                StatisticalExplanation.of(ExplanationFixtures.score(alone)), "amount_outlier"))
-                .isCloseTo(1.0, within(TOLERANCE));
+        assertThat(withQuietNeighbours)
+                .as("two neighbours that could judge and found nothing take no share")
+                .isCloseTo(onlyApplicable, within(TOLERANCE));
+        assertThat(withLoudNeighbours)
+                .as("two neighbours that fired do")
+                .isLessThan(onlyApplicable);
     }
 
     @Test
-    @DisplayName("effective weight is the fixed weight over the applicable weight")
-    void effectiveWeightIsRenormalised() {
+    @DisplayName("the applicable weight is still reported, as a statement rather than a divisor")
+    void applicableWeightIsStillPublished() {
         Map<Signal, Double> statistics = new EnumMap<>(Signal.class);
         statistics.put(Signal.AMOUNT_OUTLIER, 7.0);
         statistics.put(Signal.VELOCITY, 5.5);
@@ -81,10 +99,11 @@ class StatisticalExplanationTest {
         StatisticalExplanation explanation =
                 StatisticalExplanation.of(ExplanationFixtures.score(statistics));
 
-        double applicableWeight = Signal.AMOUNT_OUTLIER.weight() + Signal.VELOCITY.weight();
-        assertThat(explanation.applicableWeight()).isCloseTo(applicableWeight, within(TOLERANCE));
-        assertThat(effectiveWeightOf(explanation, "amount_outlier"))
-                .isCloseTo(Signal.AMOUNT_OUTLIER.weight() / applicableWeight, within(TOLERANCE));
+        assertThat(explanation.applicableWeight())
+                .as("how much of the signal weight was able to speak, which is worth knowing "
+                        + "even though the composite no longer divides by it")
+                .isCloseTo(Signal.AMOUNT_OUTLIER.weight() + Signal.VELOCITY.weight(),
+                        within(TOLERANCE));
     }
 
     /**
@@ -113,7 +132,7 @@ class StatisticalExplanationTest {
         assertThat(explanation.contributions().stream()
                 .mapToDouble(SignalContribution::contribution)
                 .sum())
-                .isCloseTo(explanation.composite(), within(TOLERANCE));
+                .isCloseTo(1.0, within(TOLERANCE));
     }
 
     @Test
@@ -132,7 +151,6 @@ class StatisticalExplanationTest {
         assertThat(explanation.unmeasurable())
                 .allSatisfy(contribution -> {
                     assertThat(contribution.contribution()).isZero();
-                    assertThat(contribution.effectiveWeight()).isZero();
                     assertThat(contribution.statistic())
                             .as("null, not zero: they are different claims")
                             .isNull();
@@ -183,7 +201,12 @@ class StatisticalExplanationTest {
 
         assertThat(explanation.drivers()).hasSize(1);
         assertThat(explanation.drivers().get(0).signal()).isEqualTo(signal.wireName());
-        assertThat(explanation.drivers().get(0).contribution()).isCloseTo(1.0, within(TOLERANCE));
+        assertThat(explanation.drivers().get(0).contribution())
+                .as("the only signal that fired supplied all of the score")
+                .isCloseTo(1.0, within(TOLERANCE));
+        assertThat(explanation.composite())
+                .as("and the score itself is the cube root of that signal's weight")
+                .isCloseTo(Math.cbrt(signal.weight()), within(TOLERANCE));
     }
 
     private static double contributionOf(StatisticalExplanation explanation, String signal) {
@@ -194,11 +217,4 @@ class StatisticalExplanationTest {
                 .orElseThrow();
     }
 
-    private static double effectiveWeightOf(StatisticalExplanation explanation, String signal) {
-        return explanation.contributions().stream()
-                .filter(contribution -> contribution.signal().equals(signal))
-                .mapToDouble(SignalContribution::effectiveWeight)
-                .findFirst()
-                .orElseThrow();
-    }
 }

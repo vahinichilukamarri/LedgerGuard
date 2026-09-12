@@ -16,21 +16,22 @@ import java.util.List;
  * building half of it here without data would be the expensive kind of
  * premature.
  *
- * <h2>Renormalisation, and the trade it makes</h2>
+ * <h2>Combination, and where it lives</h2>
  *
- * The composite divides by the weight of the signals that were <em>applicable</em>,
- * not by the total weight of all five. Without that, an account with only two
- * measurable signals could never exceed 0.45 however extreme its behaviour, and
- * thin-history accounts — where a good deal of fraud lives — would be
- * structurally invisible.
+ * The arithmetic is {@link CompositeAggregation}, which Phase 13 replaced after
+ * Phase 12 measured what the original cost. Phases 8 to 12 used a weighted
+ * arithmetic mean renormalised over the applicable signals; that function could
+ * not flag an account on one signal once three of the five applied, however
+ * extreme that signal was, and it made thin-history accounts easier to flag than
+ * fully-measured ones. It is now a weighted power mean of degree three,
+ * unrenormalised. See that class for the derivation and for what changed about
+ * the meaning of the number.
  *
- * <p>The cost is the mirror image: with one applicable signal firing hard, the
- * composite reads 1.0 on a single piece of evidence. That is why
- * {@link AnomalyScore#applicableSignals()} travels with the score rather than
- * being folded into it, and why {@link AnomalyScore#isWellEvidenced()} exists.
- * The alternative — quietly damping thin scores by some confidence factor —
- * would bury the same weakness inside a number that looked more trustworthy.
- * Better to report both and let the reader see the shape of the evidence.
+ * <p>What did not change: {@link AnomalyScore#applicableSignals()} still travels
+ * beside the score rather than being folded into it, and
+ * {@link AnomalyScore#isWellEvidenced()} still exists. They matter more now, not
+ * less — the composite no longer encodes how much of the evidence was
+ * measurable, so those two fields are the only place that information lives.
  */
 public class AnomalyScorer {
 
@@ -55,26 +56,19 @@ public class AnomalyScorer {
 
     public AnomalyScore score(AccountActivity activity) {
         List<SignalScore> scores = new ArrayList<>(signals.size());
-        double weighted = 0;
-        double applicableWeight = 0;
         int applicable = 0;
 
         for (AnomalySignal signal : signals) {
             SignalScore score = signal.evaluate(activity, settings);
             scores.add(score);
-
-            if (!score.applicable()) {
-                continue;
+            if (score.applicable()) {
+                applicable++;
             }
-            applicable++;
-            double weight = score.signal().weight();
-            weighted += weight * score.score();
-            applicableWeight += weight;
         }
 
         // No applicable signal is not a clean bill of health; it is an absence
         // of evidence, and it scores zero with applicableSignals = 0 to say so.
-        double composite = applicableWeight == 0 ? 0.0 : weighted / applicableWeight;
+        double composite = CompositeAggregation.combine(scores);
 
         return new AnomalyScore(activity.accountId(), activity.asOf(), composite, applicable, scores);
     }

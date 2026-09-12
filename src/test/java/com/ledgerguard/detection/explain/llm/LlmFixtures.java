@@ -55,14 +55,18 @@ final class LlmFixtures {
     /**
      * A narrative that should pass every check for {@link #bothElevated()}.
      *
-     * <p>Every number in it is in that evidence: 0.8 is the composite and the
-     * signal's contribution, 1 the applicable-signal count, 0.9 the isolation
-     * score, 120 the training rows, and 100 and 99 are the share and percentile
-     * as percentages.
+     * <p>Every number in it is in that evidence: 0.63 is the composite, 1 the
+     * applicable-signal count, 0.9 the isolation score, 120 the training rows,
+     * and the two 100s and the 99 are shares and a percentile as percentages.
+     *
+     * <p>The composite was 0.8 here until Phase 13. A single applicable signal,
+     * saturated, used to renormalise to a composite of 1.0 and could be dialled
+     * anywhere below it; it now reaches the cube root of that signal's weight
+     * and no further, which is 0.63. The fixture moved because the system did.
      */
     static final String VALID_NARRATIVE = """
-            The statistical composite is 0.8 over 1 applicable signal, driven by amount_outlier \
-            at 0.8 of the composite. The model scores 0.9 against 120 training accounts and \
+            The statistical composite is 0.63 over 1 applicable signal, driven by amount_outlier \
+            at 100% of the score. The model scores 0.9 against 120 training accounts and \
             isolated this account on amountModifiedZ, 100% of the isolation, sitting above the \
             population median at the 99th percentile. Both layers are elevated and they point at \
             the same behaviour.""";

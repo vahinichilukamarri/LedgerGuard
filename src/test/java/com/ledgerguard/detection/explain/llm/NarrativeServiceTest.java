@@ -168,8 +168,8 @@ class NarrativeServiceTest {
     void noModelStillNarrates() {
         NarrativeService service = serviceFor(new LlmFixtures.ScriptedClient()
                 .returning("""
-                        The statistical composite is 0.7 over 1 applicable signal, driven by \
-                        amount_outlier at 0.7 of the composite. Four of the five signals could \
+                        The statistical composite is 0.63 over 1 applicable signal, driven by \
+                        amount_outlier at 100% of the score. Four of the five signals could \
                         not judge for want of history, which is an absence of evidence rather \
                         than evidence of absence."""));
 

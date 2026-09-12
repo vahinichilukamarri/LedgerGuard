@@ -194,12 +194,15 @@ public record Reconciliation(
     /**
      * The ML_ONLY case that is not really a disagreement.
      *
-     * <p>A signal can fire at full strength and still leave the composite
-     * quiet, because the composite is a weighted mean: one signal at 1.0 among
-     * four applicable ones cannot exceed its own effective weight. That is
-     * Phase 8's renormalisation working as documented, and without this sentence
-     * the output would report "the statistical layer did not see it" about a
-     * signal that saw it perfectly well and was averaged down.
+     * <p>A signal can fire below saturation and still leave the composite quiet,
+     * because the composite aggregates and one partial signal may not carry it
+     * alone. Without this sentence the output would report "the statistical
+     * layer did not see it" about a signal that saw it perfectly well.
+     *
+     * <p>Phase 13 narrowed this case considerably: a signal at full saturation
+     * now elevates any account by itself, so the note fires for partially-firing
+     * signals rather than, as in Phase 10, for signals shouting at 1.00 and
+     * being averaged down anyway.
      */
     private static String dilutionNote(StatisticalExplanation statistical,
                                        List<String> corroboratedSignals) {
@@ -214,17 +217,17 @@ public record Reconciliation(
         }
 
         String named = diluted.stream()
-                .map(contribution -> "%s at %.2f of its own scale, contributing %.2f"
+                .map(contribution -> "%s at %.2f of its own scale, supplying %.0f%% of the score"
                         .formatted(contribution.signal(), contribution.score(),
-                                contribution.contribution()))
+                                contribution.contribution() * 100))
                 .toList()
                 .stream()
                 .reduce((left, right) -> left + " and " + right)
                 .orElse("");
 
-        return (" Note that %s did fire — %s — but the composite is a weighted mean over %d "
-                + "applicable signals, so it stayed below the %.2f convention. On that axis the "
-                + "layers are not disagreeing; the statistical score is diluted.")
+        return (" Note that %s did fire — %s — while the composite over %d applicable signals "
+                + "stayed below the %.2f convention. On that axis the layers are not disagreeing; "
+                + "the statistical score simply did not carry it over the line.")
                 .formatted(join(corroboratedSignals), named, statistical.applicableSignals(),
                         Agreement.STATISTICAL_ELEVATED);
     }

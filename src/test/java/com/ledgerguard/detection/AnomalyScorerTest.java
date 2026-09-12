@@ -1,5 +1,6 @@
 package com.ledgerguard.detection;
 
+import com.ledgerguard.detection.ml.Agreement;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -9,8 +10,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 
 /**
- * How the five signals combine, including the case the renormalisation is a
- * trade-off about.
+ * How the five signals combine.
+ *
+ * <p>Rewritten in Phase 13, which replaced the renormalised weighted mean these
+ * tests were written against. The three that asserted renormalisation now
+ * assert the properties that replaced it; see {@link CompositeAggregation} for
+ * the reasoning and {@code CompositeCeilingTest} for the exhaustive version.
  */
 class AnomalyScorerTest {
 
@@ -39,9 +44,15 @@ class AnomalyScorerTest {
         return ActivityFixtures.account().build();
     }
 
+    /**
+     * Rewritten in Phase 13. This test used to assert that a lone saturated
+     * signal contributes exactly its own weight — 0.25 for the amount signal —
+     * which was true of the weighted mean and was also the defect: 0.25 is half
+     * the elevation threshold, so the account could not be flagged.
+     */
     @Test
-    @DisplayName("with every signal applicable the composite is the plain weighted mean")
-    void weightedMeanWhenAllApplicable() {
+    @DisplayName("with every signal applicable, one saturated signal still elevates")
+    void oneSaturatedSignalElevatesAFullyMeasuredAccount() {
         AnomalyScorer scorer = new AnomalyScorer(List.of(
                 firing(Signal.AMOUNT_OUTLIER, 1.0),
                 firing(Signal.VELOCITY, 0.0),
@@ -53,36 +64,49 @@ class AnomalyScorerTest {
 
         assertThat(score.applicableSignals()).isEqualTo(5);
         assertThat(score.composite())
-                .as("the weights sum to one, so a single signal at full scale contributes its weight")
-                .isCloseTo(Signal.AMOUNT_OUTLIER.weight(), within(1e-9));
+                .as("the cube root of the signal's weight, which clears the 0.50 convention")
+                .isCloseTo(Math.cbrt(Signal.AMOUNT_OUTLIER.weight()), within(1e-9));
+        assertThat(score.composite()).isGreaterThanOrEqualTo(Agreement.STATISTICAL_ELEVATED);
     }
 
     /**
-     * The renormalisation, stated as a test because it is the scorer's one
-     * genuinely debatable decision.
+     * The renormalisation is gone, and this is the test that used to assert it.
+     *
+     * <p>It now asserts the opposite property, which is the point of Phase 13:
+     * what the other signals could or could not measure makes no difference to
+     * what this one contributes. See {@code CompositeCeilingTest} for the
+     * exhaustive version and {@link CompositeAggregation} for why.
      */
     @Test
-    @DisplayName("the composite divides by the weight that could be measured, not the whole weight")
-    void renormalisesOverApplicableSignals() {
-        AnomalyScorer scorer = new AnomalyScorer(List.of(
+    @DisplayName("the composite does not depend on how many signals could be measured")
+    void measurabilityDoesNotChangeTheScore() {
+        AnomalyScorer fullyMeasured = new AnomalyScorer(List.of(
+                firing(Signal.AMOUNT_OUTLIER, 1.0),
+                firing(Signal.VELOCITY, 0.0),
+                firing(Signal.BURST, 0.0),
+                firing(Signal.RECONCILIATION_MISMATCH_RATE, 0.0),
+                firing(Signal.REFUND_REVERSAL_RATE, 0.0)), SETTINGS);
+
+        AnomalyScorer thinHistory = new AnomalyScorer(List.of(
                 firing(Signal.AMOUNT_OUTLIER, 1.0),
                 firing(Signal.VELOCITY, 0.0),
                 silent(Signal.BURST),
                 silent(Signal.RECONCILIATION_MISMATCH_RATE),
                 silent(Signal.REFUND_REVERSAL_RATE)), SETTINGS);
 
-        AnomalyScore score = scorer.score(anyActivity());
+        AnomalyScore measured = fullyMeasured.score(anyActivity());
+        AnomalyScore thin = thinHistory.score(anyActivity());
 
-        double applicableWeight = Signal.AMOUNT_OUTLIER.weight() + Signal.VELOCITY.weight();
-        assertThat(score.applicableSignals()).isEqualTo(2);
-        assertThat(score.composite())
-                .as("without renormalising, a thin-history account could never exceed 0.45 "
-                        + "however extreme its behaviour")
-                .isCloseTo(Signal.AMOUNT_OUTLIER.weight() / applicableWeight, within(1e-9));
+        assertThat(thin.applicableSignals()).isEqualTo(2);
+        assertThat(measured.applicableSignals()).isEqualTo(5);
+        assertThat(thin.composite())
+                .as("the same behaviour, judged against less evidence, is the same score; "
+                        + "how much evidence there was lives in applicableSignals")
+                .isCloseTo(measured.composite(), within(1e-9));
     }
 
     @Test
-    @DisplayName("one applicable signal firing hard reads 1.0, and says so out loud")
+    @DisplayName("one applicable signal firing hard is elevated without claiming certainty")
     void singleSignalSaturatesButIsMarkedThinlyEvidenced() {
         AnomalyScorer scorer = new AnomalyScorer(List.of(
                 firing(Signal.AMOUNT_OUTLIER, 1.0),
@@ -93,10 +117,14 @@ class AnomalyScorerTest {
 
         AnomalyScore score = scorer.score(anyActivity());
 
-        assertThat(score.composite()).isEqualTo(1.0);
+        // Phases 8 to 12 reported 1.0 here: total certainty from one signal,
+        // documented as a known wart. Phase 13 retired it.
+        assertThat(score.composite())
+                .isGreaterThanOrEqualTo(Agreement.STATISTICAL_ELEVATED)
+                .isLessThan(0.8);
         assertThat(score.applicableSignals()).isEqualTo(1);
         assertThat(score.isWellEvidenced())
-                .as("the cost of renormalising is visible rather than hidden inside the number")
+                .as("thin evidence is still called thin, in the field built to say so")
                 .isFalse();
     }
 
