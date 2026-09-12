@@ -4,7 +4,10 @@ import com.ledgerguard.accounts.AccountService;
 import com.ledgerguard.chaos.TickingClock;
 import com.ledgerguard.config.Money;
 import com.ledgerguard.detection.ml.MlDetectionService;
+import com.ledgerguard.detection.CompositeAggregation;
 import com.ledgerguard.detection.DetectionService;
+import com.ledgerguard.detection.SignalScore;
+import com.ledgerguard.detection.ml.Agreement;
 import com.ledgerguard.payments.PaymentService;
 import com.ledgerguard.support.LedgerPostgres;
 import org.junit.jupiter.api.BeforeEach;
@@ -466,28 +469,42 @@ class ValidationFlowIntegrationTest {
         List<UUID> anomalous = new ArrayList<>();
         UUID payee = account();
 
-        // Forty accounts with quiet, regular histories.
         for (int i = 0; i < 40; i++) {
-            UUID payer = account();
-            ordinary.add(payer);
-            for (int day = 0; day < 25; day++) {
-                clock.advance(Duration.ofHours(6));
-                pay(payer, payee, 5_000 + (long) i * 31 + day * 7L);
-            }
+            ordinary.add(account());
+        }
+        for (int i = 0; i < 10; i++) {
+            anomalous.add(account());
         }
 
-        // Ten that are unlike them in ways the ledger can see.
-        for (int i = 0; i < 10; i++) {
-            UUID payer = account();
-            anomalous.add(payer);
-            for (int day = 0; day < 25; day++) {
-                clock.advance(Duration.ofHours(6));
-                pay(payer, payee, 4_000 + (long) i * 29 + day * 5L);
-            }
-            clock.advance(Duration.ofMinutes(2));
+        // ALSO CORRECTED IN PHASE 13. The histories used to be built one
+        // account at a time, which pushed the earliest accounts' payments
+        // outside the thirty-day baseline window by the time the last account
+        // was finished -- so their amount signal had no history to judge
+        // against and reported insufficient data. Interleaving puts every
+        // account's history in the same six-day span, which is both more
+        // realistic and the only way every account is actually measurable when
+        // the benchmark asks.
+        quietHistories(ordinary, payee, 5_000);
+        quietHistories(anomalous, payee, 4_000);
+
+        // CORRECTED IN PHASE 13. The bursts used to happen inside the loop
+        // above, which advanced the clock by 150 hours per account afterwards,
+        // so by the time the benchmark scored anything only the LAST anomalous
+        // account still had its burst inside the one-hour recent window. The
+        // other nine had no recent payments at all, so the amount and burst
+        // signals reported insufficient data and could not fire whatever the
+        // aggregation did.
+        //
+        // That is what Phase 12 measured and attributed to the composite
+        // ceiling. The ceiling is real and provable independently of any data
+        // -- see CompositeCeilingTest -- but this benchmark never exercised it.
+        // Doing the bursts together, at the end, is what makes the anomalies
+        // visible to the detector at the moment it is asked.
+        for (int i = 0; i < anomalous.size(); i++) {
+            clock.advance(Duration.ofSeconds(20));
             for (int burst = 0; burst < 5; burst++) {
                 clock.advance(Duration.ofSeconds(3));
-                pay(payer, payee, 6_000_000 + (long) i * 1_000);
+                pay(anomalous.get(i), payee, 6_000_000 + (long) i * 1_000);
             }
         }
 
@@ -513,7 +530,198 @@ class ValidationFlowIntegrationTest {
                 .as("synthetic ground truth is complete, so recall is defined here")
                 .isTrue();
 
+        printBeforeAndAfter(ordinary, anomalous, asOf);
         print(report, anomalous.size(), ordinary.size());
+    }
+
+    /**
+     * How far the ceiling reaches on a real ledger, which turned out to be the
+     * more interesting question.
+     *
+     * <h2>What this was written to show, and did not</h2>
+     *
+     * The intent was a population the legacy aggregation could not flag and the
+     * new one can: accounts anomalous on exactly one axis. It builds them
+     * correctly — a single payment far outside the account's own history, no
+     * burst because one payment is not a cluster, no rate spike because one
+     * payment in an hour is unremarkable against four a day — and all ten
+     * saturate the amount signal.
+     *
+     * <p>Both aggregations flag all ten. The reason is the applicable count:
+     * such an account has <b>two</b> applicable signals, not five. The burst
+     * signal needs three recent payments, and the two rate signals each need
+     * ten transactions in the recent window, so a lone payment leaves only
+     * amount and velocity able to judge — and at two applicable signals the
+     * legacy weighted mean gave 0.25/0.45 = 0.556 and flagged perfectly well.
+     *
+     * <h2>The reachability boundary</h2>
+     *
+     * The ceiling bites from three applicable signals upward. Reaching that on
+     * this ledger needs an account with enough recent activity to make the
+     * burst or rate signals measurable, while remaining unremarkable on those
+     * axes — a high-volume account making one out-of-character payment. Keeping
+     * velocity quiet at ten transactions an hour requires a baseline rate of
+     * about ten an hour, which across the thirty-day baseline span is roughly
+     * seven thousand payments. That is a real and important account type and it
+     * is not one a test should build.
+     *
+     * <p>So the ceiling is proven where it can be proven exactly — over all 31
+     * applicable sets in {@code CompositeCeilingTest}, from the weights alone —
+     * and this test records the boundary of what a ledger-level benchmark can
+     * reach. An honest "no change here, and here is why" is worth more than a
+     * fixture contorted until the number moves.
+     */
+    @Test
+    @DisplayName("a lone anomalous payment leaves two applicable signals, below the ceiling")
+    void singleAxisBenchmark() {
+        List<UUID> ordinary = new ArrayList<>();
+        List<UUID> anomalous = new ArrayList<>();
+        UUID payee = account();
+
+        for (int i = 0; i < 20; i++) {
+            ordinary.add(account());
+        }
+        for (int i = 0; i < 10; i++) {
+            anomalous.add(account());
+        }
+        quietHistories(ordinary, payee, 5_000);
+        quietHistories(anomalous, payee, 4_000);
+
+        // One payment each, far outside their own history, all inside the
+        // recent window. Deliberately not a burst and deliberately not a rate
+        // spike: exactly one signal is meant to fire.
+        for (int i = 0; i < anomalous.size(); i++) {
+            clock.advance(Duration.ofSeconds(30));
+            pay(anomalous.get(i), payee, 8_000_000 + (long) i * 1_000);
+        }
+
+        Instant asOf = clock.instant();
+
+        int legacyFlagged = 0;
+        int flagged = 0;
+        int legacyFalsePositives = 0;
+        int falsePositives = 0;
+        int amountSaturated = 0;
+
+        for (UUID accountId : anomalous) {
+            List<SignalScore> signals = detection.assess(accountId, asOf).score().signals();
+            if (signals.stream().anyMatch(signal ->
+                    signal.signal() == com.ledgerguard.detection.Signal.AMOUNT_OUTLIER
+                            && signal.score() >= 1.0)) {
+                amountSaturated++;
+            }
+            if (legacyComposite(signals) >= Agreement.STATISTICAL_ELEVATED) {
+                legacyFlagged++;
+            }
+            if (CompositeAggregation.combine(signals) >= Agreement.STATISTICAL_ELEVATED) {
+                flagged++;
+            }
+        }
+        for (UUID accountId : ordinary) {
+            List<SignalScore> signals = detection.assess(accountId, asOf).score().signals();
+            if (legacyComposite(signals) >= Agreement.STATISTICAL_ELEVATED) {
+                legacyFalsePositives++;
+            }
+            if (CompositeAggregation.combine(signals) >= Agreement.STATISTICAL_ELEVATED) {
+                falsePositives++;
+            }
+        }
+
+        int applicable = detection.assess(anomalous.get(0), asOf).score().applicableSignals();
+
+        System.out.println("=== SINGLE-AXIS ANOMALIES (reachability of the ceiling) ===");
+        System.out.printf("  %d of %d saturate the amount signal; %d signals applicable each%n",
+                amountSaturated, anomalous.size(), applicable);
+        System.out.printf("  Phase 8 weighted mean : recall %d/%d, false positives %d/%d%n",
+                legacyFlagged, anomalous.size(), legacyFalsePositives, ordinary.size());
+        System.out.printf("  Phase 13 power mean   : recall %d/%d, false positives %d/%d%n",
+                flagged, anomalous.size(), falsePositives, ordinary.size());
+
+        assertThat(amountSaturated)
+                .as("the fixture must actually produce single-axis anomalies, or it tests nothing")
+                .isEqualTo(anomalous.size());
+        assertThat(applicable)
+                .as("a lone payment cannot make burst or the rate signals measurable, which is "
+                        + "why this population sits below the ceiling rather than under it")
+                .isEqualTo(2);
+        assertThat(legacyFlagged)
+                .as("at two applicable signals the legacy mean already reached 0.556")
+                .isEqualTo(anomalous.size());
+        assertThat(flagged)
+                .as("and the fix flags them too: no regression on the population that worked")
+                .isEqualTo(anomalous.size());
+        assertThat(falsePositives)
+                .as("neither aggregation flags an ordinary account")
+                .isZero();
+        assertThat(legacyFalsePositives).isZero();
+    }
+
+    /**
+     * Recall under the Phase 8 aggregation and under Phase 13's, on identical
+     * scores.
+     *
+     * <p>Both numbers come from the same {@link SignalScore} lists, so nothing
+     * differs but the function that combines them. This is validation of the
+     * fix and not calibration of anything: no weight and no threshold was
+     * chosen with reference to these labels, and the exponent was derived from
+     * the weights before the benchmark was run.
+     */
+    private void printBeforeAndAfter(List<UUID> ordinary, List<UUID> anomalous, Instant asOf) {
+        int legacyFlagged = 0;
+        int flagged = 0;
+        int legacyFalsePositives = 0;
+        int falsePositives = 0;
+
+        for (UUID accountId : anomalous) {
+            List<SignalScore> signals = detection.assess(accountId, asOf).score().signals();
+            if (legacyComposite(signals) >= Agreement.STATISTICAL_ELEVATED) {
+                legacyFlagged++;
+            }
+            if (CompositeAggregation.combine(signals) >= Agreement.STATISTICAL_ELEVATED) {
+                flagged++;
+            }
+        }
+        for (UUID accountId : ordinary) {
+            List<SignalScore> signals = detection.assess(accountId, asOf).score().signals();
+            if (legacyComposite(signals) >= Agreement.STATISTICAL_ELEVATED) {
+                legacyFalsePositives++;
+            }
+            if (CompositeAggregation.combine(signals) >= Agreement.STATISTICAL_ELEVATED) {
+                falsePositives++;
+            }
+        }
+
+        System.out.println("=== AGGREGATION BEFORE/AFTER, identical signal scores ===");
+        System.out.printf("  Phase 8 weighted mean : recall %d/%d, false positives %d/%d%n",
+                legacyFlagged, anomalous.size(), legacyFalsePositives, ordinary.size());
+        System.out.printf("  Phase 13 power mean   : recall %d/%d, false positives %d/%d%n",
+                flagged, anomalous.size(), falsePositives, ordinary.size());
+    }
+
+    /**
+     * Twenty-five regular payments each, interleaved so every account's history
+     * occupies the same span and all of it stays inside the baseline window.
+     */
+    private void quietHistories(List<UUID> payers, UUID payee, long base) {
+        for (int day = 0; day < 25; day++) {
+            clock.advance(Duration.ofHours(6));
+            for (int i = 0; i < payers.size(); i++) {
+                pay(payers.get(i), payee, base + (long) i * 31 + day * 7L);
+            }
+        }
+    }
+
+    /** Phases 8-12's aggregation, for the comparison above only. */
+    private static double legacyComposite(List<SignalScore> signals) {
+        double applicableWeight = signals.stream()
+                .filter(SignalScore::applicable)
+                .mapToDouble(signal -> signal.signal().weight())
+                .sum();
+        double weighted = signals.stream()
+                .filter(SignalScore::applicable)
+                .mapToDouble(signal -> signal.signal().weight() * signal.score())
+                .sum();
+        return applicableWeight == 0 ? 0 : weighted / applicableWeight;
     }
 
     /**
