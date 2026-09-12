@@ -2,11 +2,14 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 9 — Isolation Forest ML Detection.** A learned model
-sits *beside* Phase 8's statistical signals, never folded into them: two scores,
-reported side by side, with their relationship named rather than averaged away.
-Neither is validated — there is no labelled data — and the ML layer is not more
-authoritative for being a model. See
+**Current phase: Phase 10 — Explanation Layer.** Both detection layers now say
+why they say what they say: per-signal contributions that sum to the composite,
+per-feature attribution read off the point's real paths through the forest, and
+a plain-language summary that cannot overstate what either score means.
+Disagreement between the layers is surfaced rather than smoothed into one
+narrative. Neither score is validated — there is no labelled data — and an
+explanation describes what was computed, not what is true. See
+[EXPLANATION_REPORT.md](EXPLANATION_REPORT.md),
 [ML_DETECTION_REPORT.md](ML_DETECTION_REPORT.md) and
 [DETECTION_REPORT.md](DETECTION_REPORT.md).
 
@@ -21,8 +24,9 @@ authoritative for being a model. See
 | 7 — ChaosLab: Fault Injection & Resilience | `v0.7-chaoslab` | 15 deterministic fault-injection scenarios at the JDBC, broker and clock seams, plus a harness self-test. No new feature; one documentation defect found and fixed, no functional defect. |
 | 8 — Statistical Anomaly Detection | `v0.8-detection-statistical` | Five anomaly signals over robust statistics and exact discrete tails, combined into a weighted composite. Read-only, query-time, no ML. |
 | 9 — Isolation Forest ML Detection | `v0.9-detection-ml` | A hand-rolled Isolation Forest over an 11-feature vector, scored in parallel with the statistical composite and never blended with it. Unvalidated: no labelled data exists. |
+| 10 — Explanation Layer | `v0.10-explanation` | Signal contributions that sum to the composite, isolation-bit attribution for the forest, disagreement between the layers made legible, and template-generated summaries. No new detection. |
 
-Nothing beyond those nine phases is implemented.
+Nothing beyond those ten phases is implemented.
 
 ---
 
@@ -1429,6 +1433,135 @@ model is a hypothesis with a test suite, not a validated detector.
 
 ---
 
+## Explanation (Phase 10)
+
+Two scores and an enum are not something a reviewer can act on. This phase turns
+them into a breakdown, an attribution and a few sentences of prose. It adds no
+signal and changes no model: everything explained here was already being
+computed.
+
+Full detail in [EXPLANATION_REPORT.md](EXPLANATION_REPORT.md).
+
+### The statistical half: parts that add up to the whole
+
+Each signal already explained itself in Phase 8, in a sentence written by the
+code that did the arithmetic. What was missing is how much of *this account's*
+composite each one supplied, which depends on what else could be measured — the
+same signal at the same score contributes 0.25 of a five-signal composite and
+0.56 of a two-signal one.
+
+So each signal now carries an **effective weight** (its fixed weight renormalised
+over the applicable set) and a **contribution** (`effectiveWeight × score`), and:
+
+```
+sum(contribution) == composite
+```
+
+exactly. A breakdown whose parts do not add up to the whole is decoration.
+Signals that could not judge stay in the list contributing zero, because a
+missing row would read as a signal that looked and found nothing.
+
+### The hard half: explaining an Isolation Forest
+
+A forest publishes a mean path length and nothing else — no coefficients, no
+impurity gains. **Every feature-level account of an isolation score is a
+reconstruction.** Three were considered:
+
+| Method | Cost | Faithfulness |
+|---|---|---|
+| Isolation-bit attribution from the point's real paths | one extra traversal per tree | high — reads the splits this point actually crossed |
+| Leave-one-feature-out re-scoring | 11× scoring | medium — explains a substituted point, not this one |
+| Population-outlier ranking | trivial | low — can name a feature no tree split on |
+
+The first was chosen. Walk the point down every tree again; at an internal node
+holding `n` rows the point descends into a child holding `m`, so that split is
+credited `log2(n/m)` **bits of isolation** against the feature it split on.
+Subtract one bit per edge — what an even split would have given — and the
+remainder, **excess bits**, is positive exactly when a feature isolated this
+account faster than a coin flip.
+
+Bits rather than edges is what makes it an explanation. Crediting one unit per
+edge would attribute *depth*, and depth is what normal points accumulate, so the
+top of that ranking would be whichever feature the random selection happened to
+draw most often.
+
+**What it is not:** the credits do not sum to the score and are not Shapley
+values; correlated features steal credit from each other, since whichever was
+drawn first did the separating; and it is a Monte-Carlo estimate, damped by
+averaging 150 trees and deterministic under the fixed seed. All four caveats are
+in the report and in the per-account caveat list.
+
+Attribution can name a feature but never a direction — a split is a threshold.
+So each attributed feature also carries its percentile against the training
+population, in separate fields, labelled as **context rather than the model's
+reasoning**.
+
+Internal nodes now record their subsample size, which the scoring path never
+reads. No split, path or score changed.
+
+### Disagreement is surfaced, not smoothed over
+
+The easy output is one narrative per account written so that two layers
+disagreeing reads like two layers agreeing. That would undo Phase 9's central
+decision at the presentation layer. The four agreement states get four different
+sentences, and a test asserts they differ.
+
+Saying "the statistical layer cannot see this" needs to be true, so each feature
+is mapped onto that layer with three levels of visibility, not two:
+
+- **the signal's own statistic** — the first five features;
+- **the same axis, differently measured** — `recentPaymentCount` is not invisible
+  to the velocity signal, which counts the same payments, but velocity asks
+  whether the count is high *for this account* while the raw count compares
+  *across accounts*;
+- **outside it entirely** — `log10LargestRecentAmount` and
+  `log10SecondsSinceLastPayment`, the two Phase 9 added precisely because Phase 8
+  structurally cannot express them.
+
+Only the third licenses the claim that no signal looks at something.
+`corroborated` is a separate flag from `BOTH_ELEVATED`: two elevated scores
+resting on unrelated evidence look like confirmation in a ranking and are not.
+
+Writing the worked examples found two cases where the narrative claimed more
+than the numbers supported — a signal that fired at full strength but was
+averaged below the threshold being reported as a disagreement, and partial
+corroboration reading as complete. Both are in the report's findings section.
+
+### Summaries are templates, deliberately
+
+No LLM call. Determinism is a line Phases 7–9 all hold and the tests depend on
+it; the required hedging is easier to guarantee in a template than to police in
+generated text; and the content is a closed set of already-computed facts that a
+model would only rephrase.
+
+Every sentence describes a departure from a **named reference** — this account's
+own history, or the population the model trained on. A test asserts that no
+summary ever contains any of fifteen words asserting wrongdoing or certainty.
+Caveats travel as their own list rather than as a closing paragraph, because a
+limitation folded into prose is a limitation nobody reads.
+
+### Endpoints
+
+The digest rides on the existing reads; the detail has its own endpoint, because
+four kilobytes of attribution per row drowns a fifty-account ranking.
+
+```powershell
+curl.exe -s "http://localhost:8080/detection/accounts/<ACCOUNT_ID>/explanation"
+```
+
+The summary travels in full on the digest, closing qualification included, so a
+caller that never follows the link still cannot read an unqualified finding.
+
+### The caveat, still standing
+
+> **An explanation describes what the models computed. It is not evidence about
+> whether an account's behaviour is actually anomalous, and it does not become so
+> by being specific.** Neither score is validated; the weights are unfitted; the
+> thresholds are conventions. A confident-sounding explanation of an unvalidated
+> score is still an unvalidated score.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -1539,10 +1672,10 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-280 tests across thirty-four classes — 108 example-based, 38 jqwik properties
+379 tests across forty-one classes — 108 example-based, 38 jqwik properties
 that between them run tens of thousands of generated cases, 22 ChaosLab tests (15
 fault-injection scenarios plus a 7-test harness self-test), 65 statistical
-detection tests and 47 ML detection tests:
+detection tests, 47 ML detection tests and 99 explanation tests:
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -1604,6 +1737,18 @@ Phase 9 ML detection tests (see [ML_DETECTION_REPORT.md](ML_DETECTION_REPORT.md)
 | `AgreementTest` | 7 | the four-way relationship and why its two thresholds differ |
 | `MlDetectionFlowIntegrationTest` | 8 | training, the population gate, and determinism end to end on a real ledger |
 
+Phase 10 explanation tests (see [EXPLANATION_REPORT.md](EXPLANATION_REPORT.md)):
+
+| Class | Tests | Covers |
+|---|---|---|
+| `StatisticalExplanationTest` | 12 | contributions summing to the composite, renormalisation made visible, every signal attributed to itself |
+| `AttributionTest` | 20 | a point extreme on one feature attributed to that feature, once per feature; an ordinary point attributed to nothing; the credit rule and determinism |
+| `PopulationProfileTest` | 6 | the percentile context, its boundaries and its ties |
+| `FeatureProvenanceTest` | 26 | the feature-to-signal map pinned against the model's own feature order |
+| `ReconciliationTest` | 13 | all four agreement states, corroboration that is not score agreement, dilution, and four narratives that differ |
+| `SummaryWriterTest` | 14 | the forbidden vocabulary, the qualification that always travels, the caveats each account earns |
+| `ExplanationFlowIntegrationTest` | 8 | explanations agreeing with the scores they explain, on a real ledger |
+
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
 because the schema constraints are part of the product.
@@ -1664,7 +1809,8 @@ are KRaft; the difference is only in how the port is negotiated.
 | `POST` | `/reconciliation/runs` | Run a reconciliation pass now and return what it found. |
 | `GET` | `/reconciliation/incidents` | Filter incidents by `type`, `severity`, `status`, `transactionId`. |
 | `POST` | `/reconciliation/incidents/{id}/resolve` | Mark an incident resolved. |
-| `GET` | `/detection/accounts/{id}` | Anomaly score for one account, with every signal's reasoning. |
+| `GET` | `/detection/accounts/{id}` | Anomaly score for one account, with every signal's contribution and a summary. |
+| `GET` | `/detection/accounts/{id}/explanation` | Why it scores that: full signal breakdown, per-feature model attribution, how the two layers relate, caveats. |
 | `GET` | `/detection/anomalies` | Accounts either layer flags, worst first. Not ranked by a blended score, because there is no blended score. |
 | `POST` | `/detection/model/train` | Train an Isolation Forest on the ledger as it stands. Refused below 32 accounts. |
 | `GET` | `/detection/model` | What model is loaded, if any. |
@@ -1930,12 +2076,19 @@ champion/challenger - the last two because without labels you can only detect
 drift in the *input* distribution, never in accuracy, and comparing two models
 needs a metric to compare them on.
 
+Phase 10 explains those scores and validates neither. An explanation makes a
+model's behaviour inspectable; it cannot make an unmeasured detector a measured
+one, and a specific-sounding attribution of an unvalidated score is still an
+unvalidated score.
+
 Property-based testing was the Phase 6 deliverable, ChaosLab the Phase 7 one, the
-statistical signal layer the Phase 8 one and the Isolation Forest the Phase 9
-one; all four now exist - see [Verification](#verification-phase-6),
+statistical signal layer the Phase 8 one, the Isolation Forest the Phase 9 one
+and the explanation layer the Phase 10 one; all five now exist - see
+[Verification](#verification-phase-6),
 [Resilience](#resilience-phase-7---chaoslab),
-[Detection](#detection-phase-8---statistical) and
-[Machine learning](#machine-learning-phase-9---isolation-forest).
+[Detection](#detection-phase-8---statistical),
+[Machine learning](#machine-learning-phase-9---isolation-forest) and
+[Explanation](#explanation-phase-10).
 
 Each layer's coverage limits are deliberate and documented rather than implied.
 ChaosLab does not exercise multi-instance network partitions, clock skew between
@@ -1944,7 +2097,10 @@ layer uses no time decay and no per-account baseline for its two rate signals,
 and every signal is per-account, so coordinated activity spread across many
 accounts is invisible to all five. The ML layer inherits that per-account limit,
 adds an imputation risk that grows as the population's history thins, and has
-never been measured against ground truth.
+never been measured against ground truth. The explanation layer's feature
+attribution is faithful to the paths a point took and is not a unique
+decomposition of the score: correlated features take credit from each other, and
+a feature no tree happened to split on earns nothing however telling its value.
 
 Two pieces of deliberate debt, both documented where they live:
 
