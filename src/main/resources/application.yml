@@ -56,6 +56,32 @@ ledgerguard:
       send-timeout-seconds: 10
   kafka:
     consumer-group: ${LEDGERGUARD_KAFKA_GROUP:ledgerguard-ledger-events}
+  explanation:
+    llm:
+      # The narrative layer. Off unless an API key is supplied: with no key
+      # every narrative comes from Phase 10's deterministic templates, which is
+      # a supported way to run this system and the way the tests run it.
+      #
+      # The key comes from the environment and is never written here. See
+      # .env.example; .env is gitignored.
+      enabled: ${LEDGERGUARD_LLM_ENABLED:true}
+      api-key: ${LEDGERGUARD_GROQ_API_KEY:}
+      base-url: ${LEDGERGUARD_GROQ_BASE_URL:https://api.groq.com/openai/v1}
+      # Configuration rather than a constant in code: hosted catalogues change
+      # names and swap weights behind a stable id. See LLM_EXPLANATION_REPORT.md
+      # for why the small model is the default for this task.
+      model: ${LEDGERGUARD_GROQ_MODEL:llama-3.1-8b-instant}
+      temperature: 0.0
+      max-tokens: 400
+      # Short, because this sits on a read endpoint and a slow narrative is
+      # worth less than a fast template.
+      connect-timeout-ms: 1500
+      timeout-ms: 4000
+      max-attempts: 2
+      retry-backoff-ms: 200
+      failure-threshold: 3
+      cooldown-seconds: 60
+      cache-size: 500
 
 server:
   port: ${LEDGERGUARD_PORT:8080}
