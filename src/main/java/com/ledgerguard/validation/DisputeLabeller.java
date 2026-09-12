@@ -25,11 +25,25 @@ import java.util.UUID;
  * a vast, cheap, and wrong negative class, and every metric computed against it
  * would look excellent.
  *
- * <p>The consequence is worth stating plainly: <b>the dispute feed alone can
- * estimate precision and cannot estimate recall.</b> Recall needs a negative
- * class drawn without reference to the detector, which is what the human audit
- * stratum is for. The two sources are complementary rather than redundant, and
- * neither substitutes for the other.
+ * <p>The consequence runs the opposite way to the intuition, and it is worth
+ * being exact about because the first draft of this class got it backwards.
+ * With positives and no negatives:
+ *
+ * <ul>
+ *   <li><b>Recall is estimable.</b> The set of known-anomalous accounts is
+ *       known, so "how many of them did the detector flag" is a real
+ *       calculation — over the accounts disputes identify, which is not the same
+ *       population as all fraud, but is a population.</li>
+ *   <li><b>Precision is not.</b> It needs every flagged account classified, and
+ *       a flagged account with no chargeback is unresolvable: it may be a false
+ *       positive, or fraud nobody disputed, and nothing here can tell those
+ *       apart.</li>
+ * </ul>
+ *
+ * <p>So precision comes from human review of the flagged stratum, and the
+ * dispute feed supplies an independent recall estimate that no amount of
+ * reviewing the detector's own output could produce. The two sources are
+ * complementary rather than redundant, and neither substitutes for the other.
  *
  * <h2>Maturity, not arrival</h2>
  *
