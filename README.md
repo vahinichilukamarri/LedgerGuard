@@ -2,12 +2,14 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 11 — LLM-Backed Explanation.** The narratives are now
-written by a hosted model (GroqCloud) from a closed evidence payload, with every
-name and number in the generated prose checked against that evidence before
-anyone reads it. Anything that fails falls back to Phase 10's deterministic
-template, logged and never surfaced as an error. Neither score is validated —
-there is no labelled data — and **better prose is not better ground truth**. See
+**Current phase: Phase 12 — Validation.** Labels finally exist: an independent
+dispute feed, a stratified human review queue with blind labelling, and an
+evaluation harness that scores every account *as of the moment its label
+describes*. It found something. **Three of the five statistical signals must
+fire at saturation before a fully-measured account can be flagged at all** — so
+the composite is easier to trip with less evidence than with more, which is the
+opposite of the intent. Nothing was tuned in response, deliberately. See
+[VALIDATION_REPORT.md](VALIDATION_REPORT.md),
 [LLM_EXPLANATION_REPORT.md](LLM_EXPLANATION_REPORT.md),
 [EXPLANATION_REPORT.md](EXPLANATION_REPORT.md),
 [ML_DETECTION_REPORT.md](ML_DETECTION_REPORT.md) and
@@ -26,8 +28,9 @@ there is no labelled data — and **better prose is not better ground truth**. S
 | 9 — Isolation Forest ML Detection | `v0.9-detection-ml` | A hand-rolled Isolation Forest over an 11-feature vector, scored in parallel with the statistical composite and never blended with it. Unvalidated: no labelled data exists. |
 | 10 — Explanation Layer | `v0.10-explanation` | Signal contributions that sum to the composite, isolation-bit attribution for the forest, disagreement between the layers made legible, and template-generated summaries. No new detection. |
 | 11 — LLM-Backed Explanation | `v0.11-explanation-llm` | Narratives written by a Groq-hosted model from a closed evidence payload, validated name-by-name and number-by-number before serving, with the Phase 10 templates as a silent fallback. No new detection, no change to any score. |
+| 12 — Validation | `v0.12-validation` | Labels from an independent dispute feed and a stratified blind review queue, plus a leakage-safe evaluation harness. Measures the detector without tuning it, and found a structural ceiling in the Phase 8 composite. |
 
-Nothing beyond those eleven phases is implemented.
+Nothing beyond those twelve phases is implemented.
 
 ---
 
@@ -1700,6 +1703,138 @@ gitignored; [.env.example](.env.example) is committed with an empty value.
 
 ---
 
+## Validation (Phase 12 - labels)
+
+Four phases ended with "these scores are unvalidated, because there is no
+labelled data". This phase builds the machinery that ends that sentence, runs
+it, and reports what it found.
+
+Full detail in [VALIDATION_REPORT.md](VALIDATION_REPORT.md).
+
+### What it found
+
+**Three of the five statistical signals must fire at saturation before a
+fully-measured account is elevated at all.** That is arithmetic, not a
+measurement that might have gone another way:
+
+| Signals firing at 1.00 | Composite (all five applicable) | Elevated at 0.50? |
+|---|---|---|
+| `amount_outlier` alone (heaviest, 0.25) | 0.25 | no |
+| the two heaviest (0.25 + 0.20) | 0.45 | no |
+| the three lightest (0.20 + 0.20 + 0.15) | 0.55 | yes |
+
+An account whose largest payment is twelve thousand robust deviations from its
+own history scores 0.25 and is not flagged.
+
+Phase 8 documented this renormalisation as protection for thin-history accounts.
+The consequence in the other direction was never written down: a **thin** account
+where two signals apply needs **one** to fire; a **fully-measured** account needs
+**three**. The composite is easier to trip with less evidence, not more. Phase 10
+met the same arithmetic as a narrative problem and called it dilution; here it is
+a detection problem with a number on it.
+
+Nothing was tuned in response — this phase measures and does not fit, because
+fitting against the label set you then evaluate on measures nothing.
+`CompositeCeilingTest` pins the property so a later phase has to confront it.
+
+### Labels come from three places, never pooled
+
+**A dispute feed**, on the Phase 5 simulator pattern: consumes Kafka, applies its
+own rules in its own table, no access to `payments` or any score. A label source
+derived from the data being judged is a mirror, and a detector evaluated against
+a mirror passes by construction. It is also *late* — disputes are dated 30-90
+days out and become labels only when that date arrives — and selective, since
+only `FRAUDULENT` counts. A cardholder who never received goods has a dispute
+with a merchant, not evidence of fraud.
+
+**Human review**, the first write path in a layer read-only since Phase 8. It
+writes an opinion, never a score. Append-only, like postings.
+
+**Synthetic**, for exercising the harness, and with **deliberately no endpoint**:
+nothing in a running system can write one. Including them in a report produces a
+warning saying the result is circular.
+
+### The four ways this goes wrong, designed against
+
+**Verification bias.** Reviewers left alone label what the detector shows them,
+which makes every missed account invisible and turns recall into precision under
+another name. So the queue draws from a `FLAGGED` pool and a random `AUDIT` pool
+of accounts the detector did *not* surface. This cannot be retrofitted. With zero
+audit labels the evaluator reports recall as **unmeasurable** rather than
+printing a 1.0 it got by construction.
+
+**Temporal leakage.** A chargeback raised in November is evidence about September.
+Every account is scored as of its label, never as of now — otherwise the detector
+is handed every consequence of the fraud, including the refunds and
+reconciliation incidents the fraud itself caused.
+
+**Anchoring.** The review queue is blind by default; seeing the scores is what you
+ask for, not what you opt out of. Every label records whether they were visible.
+
+**Reviewer disagreement is the ceiling.** If two people disagree on a fifth of
+accounts, no detector is meaningfully 95% accurate against them. An unmeasured
+agreement rate is reported as absent rather than perfect.
+
+### Statistics done properly
+
+Design-based weighting, so one audit account reviewed out of two hundred stands
+for all two hundred. **Wilson intervals**, because the textbook formula reports
+zero width at ten out of ten and would publish certainty from ten accounts. **PR
+curves, not ROC**, because under fraud's class imbalance the false positive rate
+has a vast denominator and a mediocre detector posts an impressive 0.95.
+
+### The synthetic benchmark
+
+Circular by construction, and reported as such. 50 accounts, 10 anomalous by
+design:
+
+```
+-- statistical composite, flagging at 0.50 --
+  precision=1.000 [0.21, 1.00]   recall=0.100 [0.02, 0.40]
+  average precision=0.280  (chance=0.200)
+  best F1 at threshold 0.000: precision=0.200 recall=1.000
+
+-- isolation score, flagging at 0.60 --
+  precision=1.000 [0.57, 1.00]   recall=0.500 [0.24, 0.76]
+  average precision=0.600  (chance=0.200)
+```
+
+The statistical layer missed nine of ten anomalies it was built to catch, and its
+best operating point is "flag everything" — a threshold at which flagging nothing
+selectively beats flagging selectively is a threshold in the wrong place. Average
+precision of 0.280 against chance of 0.200 says the ranking is real and the cut
+discards most of it, which is exactly the distinction a PR curve exists to make.
+
+Phase 9's claim that `ML_ONLY` is "the row worth reading first" got its first
+evidence: anomalous 4 times out of 4, against 11% for `BOTH_QUIET`. Also n=4, on
+synthetic data, interval [0.51, 1.00] — the weakest kind of support, recorded as
+such.
+
+### Endpoints
+
+```powershell
+curl.exe -s "http://localhost:8080/validation/review/next?stratum=AUDIT"
+```
+
+```powershell
+curl.exe -s "http://localhost:8080/validation/report"
+```
+
+Warnings come first in that payload, not as a footer, because a reader who skips
+them will quote precision from thirty accounts as a property of the detector.
+
+### The caveat, finally narrowing
+
+> **The detector is still unvalidated against reality** — no real fraud has ever
+> passed through this ledger. But what was measured is a *structural* property,
+> and structural properties need no representative sample: the composite ceiling
+> holds for every account, and would hold with a million real labels. The
+> synthetic figures measure the harness, not the detector. Every real figure will
+> arrive with an interval, and the early ones will be wide enough to be
+> embarrassing — which is the correct output for thirty labels.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -1810,11 +1945,11 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-468 tests across forty-eight classes — 108 example-based, 38 jqwik properties
+526 tests across fifty-four classes — 108 example-based, 38 jqwik properties
 that between them run tens of thousands of generated cases, 22 ChaosLab tests (15
 fault-injection scenarios plus a 7-test harness self-test), 65 statistical
-detection tests, 47 ML detection tests, 101 explanation tests and 87 LLM
-narrative tests:
+detection tests, 47 ML detection tests, 101 explanation tests, 87 LLM narrative
+tests and 58 validation tests:
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -1902,6 +2037,17 @@ network call:
 | `NarrativeCacheTest` | 8 | what belongs in the key, what pointedly does not, and LRU eviction |
 | `NarrativeServiceTest` | 15 | every failure path serving a complete template narrative, and the cache serving repeats |
 
+Phase 12 validation tests (see [VALIDATION_REPORT.md](VALIDATION_REPORT.md)):
+
+| Class | Tests | Covers |
+|---|---|---|
+| `WilsonTest` | 7 | the interval that stops ten-out-of-ten being published as certainty |
+| `ConfusionMatrixTest` | 6 | precision, recall, base rate and lift, and every undefined quantity refusing to be zero |
+| `PrecisionRecallCurveTest` | 9 | perfect, inverted and random rankings; ties; weights; average precision against chance |
+| `AccountLabelTest` | 9 | what a label must say about itself before it is allowed to exist |
+| `CompositeCeilingTest` | 9 | the structural finding: three of five signals required, and thin evidence being easier to flag |
+| `ValidationFlowIntegrationTest` | 18 | leakage-safe scoring, recall refused without an audit stratum, dispute maturity, weighting, and the synthetic benchmark |
+
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
 because the schema constraints are part of the product.
@@ -1967,6 +2113,14 @@ are KRaft; the difference is only in how the port is negotiated.
 | `GET` | `/detection/anomalies` | Accounts either layer flags, worst first. Not ranked by a blended score, because there is no blended score. |
 | `POST` | `/detection/model/train` | Train an Isolation Forest on the ledger as it stands. Refused below 32 accounts. |
 | `GET` | `/detection/model` | What model is loaded, if any. |
+| `POST` | `/validation/labels` | Record a reviewer's verdict on an account. Append-only, replay-safe. |
+| `GET` | `/validation/labels/{accountId}` | Every label on an account, including superseded ones. |
+| `GET` | `/validation/review/next` | Next account to judge, blind by default. `?stratum=FLAGGED\|AUDIT`. |
+| `GET` | `/validation/review/census` | How many accounts sit in each sampling pool. |
+| `GET` | `/validation/report` | Precision, recall, PR curves and the warnings that qualify them. |
+| `POST` | `/validation/labels/from-disputes` | Turn matured chargebacks into labels. Explicit, never scheduled. |
+| `POST` | `/admin/disputes` | Raise a chargeback, for demos. |
+| `GET` | `/admin/disputes` | What the simulated card scheme believes. |
 | `POST` | `/admin/settlement/faults` | Make the simulated processor misbehave, for demos. |
 | `GET` | `/admin/settlement/records` | Inspect what the external world currently believes. |
 
@@ -2236,16 +2390,24 @@ unvalidated score. Phase 11 changes only how that explanation is worded, and if
 anything raises the stakes: fluent prose is more persuasive than a template
 without being more correct.
 
+Phase 12 builds the machinery to measure all of it and still does not validate
+the detector against reality, because no real fraud has passed through this
+ledger. What it does establish is structural -- the composite ceiling -- and
+structural findings need no representative sample. Refitting the weights and
+thresholds against a real labelled population, with a held-out split, is the
+phase this one argues for and deliberately refuses to be.
+
 Property-based testing was the Phase 6 deliverable, ChaosLab the Phase 7 one, the
 statistical signal layer the Phase 8 one, the Isolation Forest the Phase 9 one
-the explanation layer the Phase 10 one and the LLM narratives the Phase 11 one;
-all six now exist - see
+the explanation layer the Phase 10 one, the LLM narratives the Phase 11 one and
+the validation harness the Phase 12 one; all seven now exist - see
 [Verification](#verification-phase-6),
 [Resilience](#resilience-phase-7---chaoslab),
 [Detection](#detection-phase-8---statistical),
 [Machine learning](#machine-learning-phase-9---isolation-forest),
-[Explanation](#explanation-phase-10) and
-[LLM narratives](#llm-narratives-phase-11---groqcloud).
+[Explanation](#explanation-phase-10),
+[LLM narratives](#llm-narratives-phase-11---groqcloud) and
+[Validation](#validation-phase-12---labels).
 
 Each layer's coverage limits are deliberate and documented rather than implied.
 ChaosLab does not exercise multi-instance network partitions, clock skew between
