@@ -26,11 +26,11 @@ import java.util.UUID;
  * of two thresholds. That test would be about the tuning. The pipeline is
  * exercised end to end by {@code ExplanationFlowIntegrationTest} instead.
  */
-final class ExplanationFixtures {
+public final class ExplanationFixtures {
 
-    static final Instant AS_OF = Instant.parse("2026-09-12T10:00:00Z");
-    static final String NO_MODEL_REASON = ExplanationService.NO_MODEL;
-    static final UUID ACCOUNT = UUID.fromString("11111111-2222-3333-4444-555555555555");
+    public static final Instant AS_OF = Instant.parse("2026-09-12T10:00:00Z");
+    public static final String NO_MODEL_REASON = ExplanationService.NO_MODEL;
+    public static final UUID ACCOUNT = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
     private ExplanationFixtures() {
     }
@@ -43,7 +43,7 @@ final class ExplanationFixtures {
      *                   statistic. Any signal left out is reported as having
      *                   had too little data to judge
      */
-    static AnomalyScore score(Map<Signal, Double> statistics) {
+    public static AnomalyScore score(Map<Signal, Double> statistics) {
         List<SignalScore> scores = new ArrayList<>();
         double weighted = 0;
         double applicableWeight = 0;
@@ -65,7 +65,7 @@ final class ExplanationFixtures {
     }
 
     /** A score whose composite lands where the caller needs it, on one signal. */
-    static AnomalyScore statisticalScore(double composite) {
+    public static AnomalyScore statisticalScore(double composite) {
         // AMOUNT_OUTLIER alone is applicable, so the composite is that signal's
         // normalised score exactly and a target composite is one inversion away.
         double statistic = Signal.AMOUNT_OUTLIER.threshold()
@@ -76,7 +76,7 @@ final class ExplanationFixtures {
     }
 
     /** A quiet score: every signal applicable, none of them firing. */
-    static AnomalyScore quietScore() {
+    public static AnomalyScore quietScore() {
         Map<Signal, Double> statistics = new EnumMap<>(Signal.class);
         for (Signal signal : Signal.values()) {
             statistics.put(signal, 0.0);
@@ -93,7 +93,7 @@ final class ExplanationFixtures {
      * what a feature that kept putting the account on the crowded side looks
      * like.
      */
-    static MlExplanation mlExplanation(double score, String... isolatingFeatures) {
+    public static MlExplanation mlExplanation(double score, String... isolatingFeatures) {
         List<String> isolating = List.of(isolatingFeatures);
         List<FeatureAttribution> attributions = new ArrayList<>();
 
@@ -120,7 +120,7 @@ final class ExplanationFixtures {
         return new MlExplanation(score, 4.2, attributions, 120, metadata());
     }
 
-    static ModelMetadata metadata() {
+    public static ModelMetadata metadata() {
         return new ModelMetadata(20260911L, 150, 120, 120,
                 AS_OF, AS_OF, List.of(FeatureVector.NAMES));
     }

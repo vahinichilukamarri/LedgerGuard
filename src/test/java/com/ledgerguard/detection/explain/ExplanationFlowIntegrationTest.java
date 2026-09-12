@@ -6,6 +6,8 @@ import com.ledgerguard.config.Money;
 import com.ledgerguard.detection.DetectionService;
 import com.ledgerguard.detection.dto.AccountAssessmentResponse;
 import com.ledgerguard.detection.dto.AccountExplanationResponse;
+import com.ledgerguard.detection.explain.llm.NarrativeService;
+import com.ledgerguard.detection.explain.llm.NarrativeSource;
 import com.ledgerguard.detection.ml.Agreement;
 import com.ledgerguard.detection.ml.FeatureAttribution;
 import com.ledgerguard.detection.ml.FeatureVector;
@@ -106,6 +108,8 @@ class ExplanationFlowIntegrationTest {
     private MlDetectionService ml;
     @Autowired
     private ExplanationService explanations;
+    @Autowired
+    private NarrativeService narratives;
 
     @BeforeEach
     void knownStartingState() {
@@ -281,6 +285,47 @@ class ExplanationFlowIntegrationTest {
         assertThat(response.reconciliation().narrative()).isNotBlank();
         assertThat(response.caveats()).isNotEmpty();
         assertThat(response.mlUnavailableReason()).isNull();
+    }
+
+    /**
+     * Phase 11 wiring, in the configuration everyone actually runs: no API key,
+     * so the model is never called and the deterministic narrative is served.
+     *
+     * <p>This also checks that the LLM beans construct at all. They are built
+     * whether or not a key exists, precisely so that the path every test and
+     * every developer checkout exercises is the same object graph production
+     * uses, with one step that declines to run.
+     */
+    @Test
+    @DisplayName("with no API key configured the endpoint serves the template, marked as such")
+    void narrativeFallsBackToTheTemplateWithoutAKey() {
+        List<UUID> population = accountsWithHistory(ml.minimumTrainingAccounts() + 2, 3);
+        Instant asOf = clock.instant();
+        ml.train(asOf);
+
+        AccountExplanation explanation = explanations.explain(population.get(0), asOf);
+        AccountExplanationResponse response = AccountExplanationResponse.of(
+                explanation, narratives.narrate(explanation));
+
+        assertThat(response.narrativeSource()).isEqualTo(NarrativeSource.TEMPLATE);
+        assertThat(response.summary())
+                .as("the reviewer gets the complete Phase 10 narrative, not a stub")
+                .isEqualTo(explanation.summary());
+        assertThat(narratives.stats().attempted())
+                .as("an unconfigured deployment is not a failed attempt")
+                .isZero();
+    }
+
+    @Test
+    @DisplayName("the explicit template request serves the deterministic narrative too")
+    void templateCanBeAskedForByName() {
+        List<UUID> population = accountsWithHistory(ml.minimumTrainingAccounts() + 2, 3);
+        Instant asOf = clock.instant();
+
+        AccountExplanation explanation = explanations.explain(population.get(0), asOf);
+
+        assertThat(narratives.narrate(explanation, true).source())
+                .isEqualTo(NarrativeSource.TEMPLATE);
     }
 
     // --------------------------------------------------------------- helpers

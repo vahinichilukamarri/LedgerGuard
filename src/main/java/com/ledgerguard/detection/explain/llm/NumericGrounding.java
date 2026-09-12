@@ -46,8 +46,16 @@ public final class NumericGrounding {
     private static final Pattern NUMBER = Pattern.compile(
             "-?\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|-?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?");
 
-    /** Floating-point slack. Far below anything a sentence would distinguish. */
-    private static final double EPSILON = 1e-9;
+    /**
+     * Floating-point slack, <b>relative</b> rather than absolute.
+     *
+     * <p>An absolute epsilon looked fine until a test asked whether 2.41e-14
+     * grounds against 2.41e-13. They differ by 2.17e-13, which is under any
+     * absolute tolerance worth having, so the two were equal — and Phase 8's
+     * signal sentences quote p-values at exactly that magnitude. An absolute
+     * epsilon says every sufficiently small number is every other one.
+     */
+    private static final double RELATIVE_EPSILON = 1e-9;
 
     private NumericGrounding() {
     }
@@ -90,7 +98,7 @@ public final class NumericGrounding {
     }
 
     private static boolean matches(Stated stated, double evidence) {
-        if (Math.abs(stated.value() - evidence) <= EPSILON) {
+        if (nearlyEqual(stated.value(), evidence)) {
             return true;
         }
         if (!Double.isFinite(evidence)) {
@@ -99,7 +107,16 @@ public final class NumericGrounding {
         double rounded = BigDecimal.valueOf(evidence)
                 .setScale(stated.decimals(), RoundingMode.HALF_UP)
                 .doubleValue();
-        return Math.abs(stated.value() - rounded) <= EPSILON;
+        return nearlyEqual(stated.value(), rounded);
+    }
+
+    /** Equal to within a relative tolerance, so magnitude does not decide the answer. */
+    private static boolean nearlyEqual(double left, double right) {
+        if (left == right) {
+            return true;
+        }
+        double magnitude = Math.max(Math.abs(left), Math.abs(right));
+        return Math.abs(left - right) <= RELATIVE_EPSILON * magnitude;
     }
 
     private static int decimalsOf(String token) {

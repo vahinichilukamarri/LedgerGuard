@@ -3,6 +3,7 @@ package com.ledgerguard.detection.explain.llm;
 import com.ledgerguard.detection.explain.AccountExplanation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -57,10 +58,18 @@ public class NarrativeService {
     private final LongAdder rejected = new LongAdder();
     private final LongAdder unavailable = new LongAdder();
 
+    /**
+     * The wiring constructor. Annotated because the other one exists: with two
+     * candidates and no marker Spring refuses to guess, which is the right
+     * behaviour and an unhelpful startup failure to discover from an
+     * integration test.
+     */
+    @Autowired
     public NarrativeService(GroqGateway gateway, GroqProperties properties) {
         this(gateway, new NarrativeValidator(), new NarrativeCache(properties.cacheSize()), properties);
     }
 
+    /** For tests that supply their own cache, validator or scripted client. */
     public NarrativeService(GroqGateway gateway, NarrativeValidator validator,
                             NarrativeCache cache, GroqProperties properties) {
         this.gateway = gateway;
