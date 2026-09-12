@@ -118,8 +118,9 @@ public record Reconciliation(
             case BOTH_ELEVATED -> corroborated
                     ? ("Both layers are elevated and they point at the same behaviour: %s fired "
                     + "statistically, and the model isolated this account chiefly on %s. The shared "
-                    + "axis is %s.")
-                    .formatted(signals, features, join(corroboratedSignals))
+                    + "axis is %s.%s")
+                    .formatted(signals, features, join(corroboratedSignals),
+                            alsoInvisible(isolating))
                     : ("Both layers are elevated, but not on the same evidence. The composite rests "
                     + "on %s, while the model isolated this account on %s. Agreeing that something "
                     + "is unusual is not the same as agreeing on what, and nothing here corroborates "
@@ -135,10 +136,11 @@ public record Reconciliation(
                     .formatted(capitalise(signals), ml.score(), Agreement.ML_ELEVATED, ml.trainingRows());
 
             case ML_ONLY -> ("The model is elevated and the statistical layer is not. It isolated "
-                    + "this account on %s, while the composite of %.2f rests on %s. %s")
+                    + "this account on %s, while the composite of %.2f rests on %s. %s%s")
                     .formatted(features, statistical.composite(),
                             statistical.drivers().isEmpty() ? "no signal at all" : signals,
-                            outsideNote(isolating));
+                            outsideNote(isolating),
+                            dilutionNote(statistical, corroboratedSignals));
 
             case BOTH_QUIET -> ("Neither layer is elevated: a composite of %.2f over %d applicable "
                     + "signal(s) and an isolation score of %.2f, where roughly 0.5 is the middle of "
@@ -167,6 +169,64 @@ public record Reconciliation(
         return ("The statistical layer does not see %s at all, so there is nothing in the composite "
                 + "to corroborate or contradict this.")
                 .formatted(join(outside.stream().map(FeatureProvenance::featureName).toList()));
+    }
+
+    /**
+     * When the layers do corroborate, the model has usually also isolated on
+     * something the signals cannot see, and saying so keeps the corroboration
+     * honestly partial rather than letting the shared axis stand for all of it.
+     */
+    private static String alsoInvisible(List<FeatureAttribution> isolating) {
+        List<String> outside = isolating.stream()
+                .map(driver -> FeatureProvenance.byIndex(driver.index()))
+                .filter(FeatureProvenance::outsideStatisticalLayer)
+                .map(FeatureProvenance::featureName)
+                .toList();
+
+        if (outside.isEmpty()) {
+            return "";
+        }
+        return " The model also isolated on %s, which no statistical signal sees, so the "
+                .formatted(join(outside))
+                + "corroboration covers part of its reasoning rather than all of it.";
+    }
+
+    /**
+     * The ML_ONLY case that is not really a disagreement.
+     *
+     * <p>A signal can fire at full strength and still leave the composite
+     * quiet, because the composite is a weighted mean: one signal at 1.0 among
+     * four applicable ones cannot exceed its own effective weight. That is
+     * Phase 8's renormalisation working as documented, and without this sentence
+     * the output would report "the statistical layer did not see it" about a
+     * signal that saw it perfectly well and was averaged down.
+     */
+    private static String dilutionNote(StatisticalExplanation statistical,
+                                       List<String> corroboratedSignals) {
+        if (corroboratedSignals.isEmpty()) {
+            return "";
+        }
+        List<SignalContribution> diluted = statistical.drivers().stream()
+                .filter(contribution -> corroboratedSignals.contains(contribution.signal()))
+                .toList();
+        if (diluted.isEmpty()) {
+            return "";
+        }
+
+        String named = diluted.stream()
+                .map(contribution -> "%s at %.2f of its own scale, contributing %.2f"
+                        .formatted(contribution.signal(), contribution.score(),
+                                contribution.contribution()))
+                .toList()
+                .stream()
+                .reduce((left, right) -> left + " and " + right)
+                .orElse("");
+
+        return (" Note that %s did fire — %s — but the composite is a weighted mean over %d "
+                + "applicable signals, so it stayed below the %.2f convention. On that axis the "
+                + "layers are not disagreeing; the statistical score is diluted.")
+                .formatted(join(corroboratedSignals), named, statistical.applicableSignals(),
+                        Agreement.STATISTICAL_ELEVATED);
     }
 
     private static String describeDrivers(List<FeatureAttribution> isolating) {
