@@ -64,3 +64,11 @@ desktop.ini
 # jqwik records the last failing sample per property so it can be retried first.
 # Local run state, not shared history.
 .jqwik-database
+
+# --- Phase 14 ops console (Node/Vite) ---
+console/node_modules/
+console/dist/
+console/coverage/
+console/.vite/
+console/vite.config.ts.timestamp-*
+npm-debug.log*
