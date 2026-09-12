@@ -57,7 +57,14 @@ public class MlDetectionService {
     /** Null until trained. Volatile because training and scoring arrive on different threads. */
     private volatile TrainedModel model;
 
-    private record TrainedModel(IsolationForest forest, ModelMetadata metadata) {
+    /**
+     * The profile is captured at training time from the same rows the forest
+     * saw, and exists only so an explanation can say which <em>direction</em> a
+     * feature was extreme in. It changes no split, no path and no score: a
+     * forest trained by this code scores identically to one trained before the
+     * explanation layer existed.
+     */
+    private record TrainedModel(IsolationForest forest, PopulationProfile population, ModelMetadata metadata) {
     }
 
     public MlDetectionService(
@@ -110,7 +117,7 @@ public class MlDetectionService {
                 asOf,
                 List.of(FeatureVector.NAMES));
 
-        this.model = new TrainedModel(forest, metadata);
+        this.model = new TrainedModel(forest, PopulationProfile.of(rows), metadata);
         log.info("detection: trained isolation forest on {} accounts, seed {}, {} trees",
                 rows.size(), seed, forest.treeCount());
         return metadata;
@@ -145,6 +152,29 @@ public class MlDetectionService {
         }
         return Optional.of(current.forest().score(
                 FeatureExtractor.extract(assessed.activity(), assessed.score())));
+    }
+
+    /**
+     * This account's score taken apart by feature, or empty when no model has
+     * been trained.
+     *
+     * <p>Empty means the same thing here as it does for {@link #score}: the
+     * question has not been put to a model, which is not the same as a model
+     * having looked and found nothing to say.
+     */
+    public Optional<MlExplanation> explain(DetectionService.ScoredAccount assessed) {
+        TrainedModel current = model;
+        if (current == null) {
+            return Optional.empty();
+        }
+        FeatureVector features = FeatureExtractor.extract(assessed.activity(), assessed.score());
+        double[] values = features.toArray();
+        return Optional.of(MlExplanation.of(
+                current.forest().attribute(values), values, current.population(), current.metadata()));
+    }
+
+    public Optional<MlExplanation> explain(UUID accountId, Instant asOf) {
+        return model == null ? Optional.empty() : explain(detection.assess(accountId, asOf));
     }
 
     public Optional<ModelMetadata> metadata() {

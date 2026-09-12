@@ -71,8 +71,16 @@ final class IsolationTree {
             return new Node(-1, Double.NaN, null, null, size);
         }
 
-        static Node internal(int attribute, double value, Node left, Node right) {
-            return new Node(attribute, value, left, right, 0);
+        /**
+         * Internal nodes carry their subsample size too, which the scoring path
+         * never reads: {@code pathLength} only needs the size of the external
+         * node it lands on. It is recorded for the attribution walk, which
+         * measures each split by how much of the node's sample the point was
+         * separated from. Nothing about tree construction, the paths taken or
+         * the scores changes as a result.
+         */
+        static Node internal(int attribute, double value, Node left, Node right, int size) {
+            return new Node(attribute, value, left, right, size);
         }
 
         boolean isExternal() {
@@ -134,7 +142,8 @@ final class IsolationTree {
 
         return Node.internal(attribute, splitValue,
                 grow(left, depth + 1, heightLimit, random),
-                grow(right, depth + 1, heightLimit, random));
+                grow(right, depth + 1, heightLimit, random),
+                sample.size());
     }
 
     /**
@@ -185,5 +194,45 @@ final class IsolationTree {
             edges++;
         }
         return edges + IsolationForest.averagePathLength(node.size());
+    }
+
+    /**
+     * Credit each split along this point's path with the isolation it achieved.
+     *
+     * <h2>The credit rule</h2>
+     *
+     * At an internal node holding {@code n} rows the point descends into a child
+     * holding {@code m}, so the split separated it from {@code n - m} of them.
+     * The split is credited {@code log2(n/m)} <b>bits of isolation</b>: one bit
+     * for halving the sample, three for cutting it to an eighth. The bits are
+     * accumulated against the feature the node split on.
+     *
+     * <p>Bits rather than edges, and the difference decides whether the output
+     * is an explanation at all. Crediting one unit per edge would attribute
+     * <em>depth</em>, and depth is what <em>normal</em> points accumulate; the
+     * feature at the top of that ranking would be whichever one the random
+     * selection happened to pick most often. Bits measure separation achieved,
+     * which is the thing the score is made of.
+     *
+     * <p>Both partitions at an internal node are non-empty by construction — a
+     * split that emptied one side became external instead — so {@code m < n}
+     * always and every credit is strictly positive.
+     *
+     * @param bits   accumulator, one slot per feature; added to, not replaced
+     * @param splits accumulator counting nodes crossed per feature, for the
+     *               per-edge baseline the forest subtracts
+     */
+    void attribute(double[] point, double[] bits, double[] splits) {
+        Node node = root;
+        while (!node.isExternal()) {
+            Node child = point[node.splitAttribute()] < node.splitValue() ? node.left() : node.right();
+            bits[node.splitAttribute()] += log2(node.size() / (double) child.size());
+            splits[node.splitAttribute()] += 1.0;
+            node = child;
+        }
+    }
+
+    private static double log2(double value) {
+        return Math.log(value) / Math.log(2);
     }
 }

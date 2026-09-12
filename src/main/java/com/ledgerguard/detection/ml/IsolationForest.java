@@ -163,6 +163,63 @@ public final class IsolationForest {
     }
 
     /**
+     * The same score, taken apart by feature.
+     *
+     * <h2>Why an Isolation Forest needs this built by hand</h2>
+     *
+     * A linear model publishes coefficients and a decision tree classifier
+     * publishes impurity gains. A forest of random trees publishes a mean path
+     * length and nothing else, so any feature-level account of a score is a
+     * reconstruction. This one walks the point down every tree a second time and
+     * credits each split with {@code log2(n/m)} bits of isolation — see
+     * {@link IsolationTree#attribute} for the rule and why it is bits rather
+     * than edges.
+     *
+     * <p>Cost is one extra traversal per tree: the same order as scoring, which
+     * is what makes it affordable on a list endpoint. The alternative considered
+     * was leave-one-feature-out re-scoring, which costs the dimension times as
+     * much and explains a point with a substituted value rather than this one.
+     *
+     * <h2>The score is not recomputed</h2>
+     *
+     * It comes from {@link #score}, and {@code E(h(x))} is inverted back out of
+     * it by Equation 2 rather than accumulated again during the walk. A second
+     * accumulation would be a second definition of the same quantity, and the
+     * two would eventually disagree by a rounding step in a way that made the
+     * explanation look wrong about the score it was explaining.
+     */
+    public IsolationAttribution attribute(double[] point) {
+        double score = score(point);
+
+        double[] bits = new double[dimension];
+        double[] splits = new double[dimension];
+        for (IsolationTree tree : trees) {
+            tree.attribute(point, bits, splits);
+        }
+
+        List<FeatureCredit> credits = new ArrayList<>(dimension);
+        for (int index = 0; index < dimension; index++) {
+            double splitsPerTree = splits[index] / trees.size();
+            double isolationBits = bits[index] / trees.size();
+            credits.add(new FeatureCredit(
+                    index,
+                    index < FeatureVector.NAMES.length ? FeatureVector.NAMES[index] : "feature_" + index,
+                    splitsPerTree,
+                    isolationBits,
+                    isolationBits - splitsPerTree));
+        }
+
+        // E(h(x)) = -log2(s) * c(psi), Equation 2 rearranged.
+        double expectedPathLength = -(Math.log(score) / Math.log(2)) * normalisingPathLength;
+
+        return new IsolationAttribution(score, expectedPathLength, credits);
+    }
+
+    public IsolationAttribution attribute(FeatureVector features) {
+        return attribute(features.toArray());
+    }
+
+    /**
      * {@code c(n)} from Equation 1: the average path length of an unsuccessful
      * search in a binary search tree over {@code n} points.
      *
