@@ -1,13 +1,13 @@
 package com.ledgerguard.detection.dto;
 
-import com.ledgerguard.detection.AnomalyScore;
-import com.ledgerguard.detection.SignalScore;
+import com.ledgerguard.detection.explain.AccountExplanation;
+import com.ledgerguard.detection.explain.Reconciliation;
+import com.ledgerguard.detection.explain.SignalContribution;
 import com.ledgerguard.detection.ml.Agreement;
 import com.ledgerguard.detection.ml.ModelMetadata;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -20,7 +20,13 @@ import java.util.UUID;
  * earned.
  *
  * <p>Neither score is validated against ground truth. Their relationship is
- * named by {@link Agreement} rather than resolved.
+ * named by {@link Agreement} rather than resolved, and from Phase 10 it is also
+ * described in words by {@link ExplanationDigest}.
+ *
+ * @param signals the per-signal breakdown, now carrying each signal's share of
+ *                the composite as well as its raw numbers, and ordered by that
+ *                share rather than by declaration order — the order a reviewer
+ *                reads in
  */
 public record AccountAssessmentResponse(
         UUID accountId,
@@ -34,7 +40,8 @@ public record AccountAssessmentResponse(
         /** The model's view, kept separate. Absent until a model has been trained. */
         MachineLearning ml,
 
-        List<AnomalyScoreResponse.SignalDetail> signals) {
+        List<SignalContribution> signals,
+        ExplanationDigest explanation) {
 
     /**
      * @param available         false when no model has been trained. Distinct
@@ -84,36 +91,66 @@ public record AccountAssessmentResponse(
         }
     }
 
-    public static AccountAssessmentResponse of(AnomalyScore statistical,
-                                               Optional<Double> mlScore,
-                                               Optional<ModelMetadata> metadata,
-                                               String unavailableReason) {
+    /**
+     * The short form of the explanation, for callers reading a list.
+     *
+     * <p>The full attribution is four kilobytes an account and belongs at
+     * {@link #detail}. What cannot be deferred to a second request is the
+     * qualification: {@link #summary} is the generated prose in full, including
+     * its closing sentence that neither score is validated, so no unqualified
+     * finding leaves this endpoint even for a caller that never follows the
+     * link. The per-account caveat list is at the detail endpoint.
+     *
+     * @param corroborated   whether the layers point at any shared axis. Worth
+     *                       reading against {@code agreement}: false alongside
+     *                       {@code BOTH_ELEVATED} means two elevated scores
+     *                       resting on unrelated evidence
+     * @param detail         where the full explanation lives
+     */
+    public record ExplanationDigest(
+            String summary,
+            String agreement,
+            boolean corroborated,
+            List<String> statisticalDrivers,
+            List<String> modelDrivers,
+            List<String> modelDriversOutsideStatisticalView,
+            String detail) {
 
-        MachineLearning ml = mlScore.isPresent() && metadata.isPresent()
-                ? MachineLearning.of(mlScore.get(), statistical.composite(), metadata.get())
+        static ExplanationDigest from(AccountExplanation explanation) {
+            Reconciliation reconciliation = explanation.reconciliation();
+
+            return new ExplanationDigest(
+                    explanation.summary(),
+                    reconciliation == null ? null : reconciliation.agreement().name(),
+                    reconciliation != null && reconciliation.corroborated(),
+                    explanation.statistical().drivers().stream()
+                            .map(SignalContribution::signal)
+                            .toList(),
+                    reconciliation == null ? List.of() : reconciliation.modelDrivers(),
+                    reconciliation == null ? List.of() : reconciliation.modelDriversOutsideView(),
+                    "/detection/accounts/%s/explanation".formatted(explanation.accountId()));
+        }
+    }
+
+    /**
+     * Built from the explanation rather than from the scores directly, so the
+     * numbers in the digest and the numbers beside it are the same numbers.
+     */
+    public static AccountAssessmentResponse of(AccountExplanation explanation, String unavailableReason) {
+        MachineLearning ml = explanation.hasModel()
+                ? MachineLearning.of(explanation.ml().score(),
+                        explanation.statistical().composite(),
+                        explanation.ml().model())
                 : MachineLearning.unavailable(unavailableReason);
 
         return new AccountAssessmentResponse(
-                statistical.accountId(),
-                statistical.asOf(),
-                statistical.composite(),
-                statistical.applicableSignals(),
-                statistical.isWellEvidenced(),
+                explanation.accountId(),
+                explanation.asOf(),
+                explanation.statistical().composite(),
+                explanation.statistical().applicableSignals(),
+                explanation.statistical().wellEvidenced(),
                 ml,
-                statistical.signals().stream()
-                        .map(AccountAssessmentResponse::detail)
-                        .toList());
-    }
-
-    private static AnomalyScoreResponse.SignalDetail detail(SignalScore score) {
-        return new AnomalyScoreResponse.SignalDetail(
-                score.signal().wireName(),
-                score.applicable(),
-                score.fired(),
-                Double.isNaN(score.statistic()) ? null : score.statistic(),
-                score.score(),
-                score.signal().weight(),
-                score.explanation(),
-                score.subjectId());
+                explanation.statistical().contributions(),
+                ExplanationDigest.from(explanation));
     }
 }
