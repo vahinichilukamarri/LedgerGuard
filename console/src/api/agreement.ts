@@ -52,7 +52,8 @@ export interface DisplayAgreement {
 export interface AgreementInputs {
   agreement: AgreementState | null;
   corroborated: boolean;
-  modelDriversOutsideView: string[];
+  /** Readonly: the derivation reads this list and never reorders or mutates it. */
+  modelDriversOutsideView: readonly string[];
 }
 
 export function displayAgreement(input: AgreementInputs): DisplayAgreement {
