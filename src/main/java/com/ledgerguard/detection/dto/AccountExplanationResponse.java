@@ -4,6 +4,8 @@ import com.ledgerguard.detection.explain.AccountExplanation;
 import com.ledgerguard.detection.explain.Reconciliation;
 import com.ledgerguard.detection.explain.SignalContribution;
 import com.ledgerguard.detection.explain.StatisticalExplanation;
+import com.ledgerguard.detection.explain.llm.Narrative;
+import com.ledgerguard.detection.explain.llm.NarrativeSource;
 import com.ledgerguard.detection.ml.FeatureAttribution;
 import com.ledgerguard.detection.ml.MlExplanation;
 
@@ -33,6 +35,13 @@ import java.util.UUID;
  * are flat records of strings, doubles and booleans that were designed in this
  * phase for exactly this purpose, and a mirror class would be a second place
  * for a field to be forgotten.
+ *
+ * <h2>Which narrative this is</h2>
+ *
+ * From Phase 11 {@link #summary} may be written by a hosted model rather than
+ * by a template, so {@link #narrativeSource} says which. The numbers around it
+ * are unaffected either way: the model is given the same evidence the template
+ * consumes and is allowed to restate it, never to add to it.
  */
 public record AccountExplanationResponse(
         UUID accountId,
@@ -42,6 +51,14 @@ public record AccountExplanationResponse(
         String mlUnavailableReason,
         Reconciliation reconciliation,
         String summary,
+
+        /**
+         * {@code TEMPLATE} or {@code LLM}. Not an error field: a template
+         * served because a model timed out looks the same here as one served
+         * because no model is configured, which is deliberate.
+         */
+        NarrativeSource narrativeSource,
+
         List<String> caveats) {
 
     /**
@@ -90,7 +107,12 @@ public record AccountExplanationResponse(
         }
     }
 
+    /** With Phase 10's deterministic narrative. */
     public static AccountExplanationResponse of(AccountExplanation explanation) {
+        return of(explanation, Narrative.template(explanation.summary()));
+    }
+
+    public static AccountExplanationResponse of(AccountExplanation explanation, Narrative narrative) {
         return new AccountExplanationResponse(
                 explanation.accountId(),
                 explanation.asOf(),
@@ -98,7 +120,8 @@ public record AccountExplanationResponse(
                 explanation.hasModel() ? MachineLearning.from(explanation.ml()) : null,
                 explanation.mlUnavailableReason(),
                 explanation.reconciliation(),
-                explanation.summary(),
+                narrative.text(),
+                narrative.source(),
                 explanation.caveats());
     }
 }

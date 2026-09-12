@@ -4,6 +4,7 @@ import com.ledgerguard.detection.dto.AccountAssessmentResponse;
 import com.ledgerguard.detection.dto.AccountExplanationResponse;
 import com.ledgerguard.detection.explain.AccountExplanation;
 import com.ledgerguard.detection.explain.ExplanationService;
+import com.ledgerguard.detection.explain.llm.NarrativeService;
 import com.ledgerguard.detection.ml.Agreement;
 import com.ledgerguard.detection.ml.MlDetectionService;
 import com.ledgerguard.detection.ml.ModelMetadata;
@@ -36,16 +37,22 @@ import java.util.UUID;
 @RequestMapping("/detection")
 public class DetectionController {
 
+    /** Asks for the deterministic narrative rather than the model's. */
+    private static final String TEMPLATE_NARRATIVE = "template";
+
     private final DetectionService detection;
     private final MlDetectionService ml;
     private final ExplanationService explanations;
+    private final NarrativeService narratives;
     private final Clock clock;
 
     public DetectionController(DetectionService detection, MlDetectionService ml,
-                               ExplanationService explanations, Clock clock) {
+                               ExplanationService explanations, NarrativeService narratives,
+                               Clock clock) {
         this.detection = detection;
         this.ml = ml;
         this.explanations = explanations;
+        this.narratives = narratives;
         this.clock = clock;
     }
 
@@ -58,6 +65,10 @@ public class DetectionController {
      * to a score lookup. The summary travels in full, though, including its
      * closing qualification, so a caller that never follows the link to
      * {@code /explanation} still cannot read an unqualified finding.
+     *
+     * <p>Its narrative is always the template. A score lookup should stay a
+     * fast read, and paying a model call to restate numbers the caller may only
+     * be scanning is latency spent on the wrong request.
      */
     @GetMapping("/accounts/{accountId}")
     public ResponseEntity<AccountAssessmentResponse> assess(@PathVariable UUID accountId) {
@@ -74,11 +85,31 @@ public class DetectionController {
      * detail is an order of magnitude larger than the summary, and a caller
      * scanning a ranking wants to know which account to open, not to receive
      * attribution tables for the forty they will not.
+     *
+     * <h2>The only place a model is called</h2>
+     *
+     * Phase 11's LLM narrative is generated here and nowhere else. The ranking
+     * returns many accounts, and one model call per row would put the cost and
+     * the latency of narration on a page nobody reads in full — fifty calls to
+     * help someone choose which one account to open. Here a human has already
+     * chosen, so the spend is bounded by attention rather than by page size,
+     * and the cache makes a second look free.
+     *
+     * @param narrative {@code template} to skip the model and take Phase 10's
+     *                  deterministic wording. Anything else takes the default,
+     *                  which serves the model's prose when it is available and
+     *                  passes validation, and the template when it does not
      */
     @GetMapping("/accounts/{accountId}/explanation")
-    public ResponseEntity<AccountExplanationResponse> explain(@PathVariable UUID accountId) {
+    public ResponseEntity<AccountExplanationResponse> explain(
+            @PathVariable UUID accountId,
+            @RequestParam(name = "narrative", required = false) String narrative) {
+
+        AccountExplanation explanation = explanations.explain(accountId, Instant.now(clock));
+        boolean preferTemplate = TEMPLATE_NARRATIVE.equalsIgnoreCase(narrative);
+
         return ResponseEntity.ok(AccountExplanationResponse.of(
-                explanations.explain(accountId, Instant.now(clock))));
+                explanation, narratives.narrate(explanation, preferTemplate)));
     }
 
     /**
