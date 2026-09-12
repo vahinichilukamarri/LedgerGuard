@@ -2,13 +2,13 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 10 — Explanation Layer.** Both detection layers now say
-why they say what they say: per-signal contributions that sum to the composite,
-per-feature attribution read off the point's real paths through the forest, and
-a plain-language summary that cannot overstate what either score means.
-Disagreement between the layers is surfaced rather than smoothed into one
-narrative. Neither score is validated — there is no labelled data — and an
-explanation describes what was computed, not what is true. See
+**Current phase: Phase 11 — LLM-Backed Explanation.** The narratives are now
+written by a hosted model (GroqCloud) from a closed evidence payload, with every
+name and number in the generated prose checked against that evidence before
+anyone reads it. Anything that fails falls back to Phase 10's deterministic
+template, logged and never surfaced as an error. Neither score is validated —
+there is no labelled data — and **better prose is not better ground truth**. See
+[LLM_EXPLANATION_REPORT.md](LLM_EXPLANATION_REPORT.md),
 [EXPLANATION_REPORT.md](EXPLANATION_REPORT.md),
 [ML_DETECTION_REPORT.md](ML_DETECTION_REPORT.md) and
 [DETECTION_REPORT.md](DETECTION_REPORT.md).
@@ -25,8 +25,9 @@ explanation describes what was computed, not what is true. See
 | 8 — Statistical Anomaly Detection | `v0.8-detection-statistical` | Five anomaly signals over robust statistics and exact discrete tails, combined into a weighted composite. Read-only, query-time, no ML. |
 | 9 — Isolation Forest ML Detection | `v0.9-detection-ml` | A hand-rolled Isolation Forest over an 11-feature vector, scored in parallel with the statistical composite and never blended with it. Unvalidated: no labelled data exists. |
 | 10 — Explanation Layer | `v0.10-explanation` | Signal contributions that sum to the composite, isolation-bit attribution for the forest, disagreement between the layers made legible, and template-generated summaries. No new detection. |
+| 11 — LLM-Backed Explanation | `v0.11-explanation-llm` | Narratives written by a Groq-hosted model from a closed evidence payload, validated name-by-name and number-by-number before serving, with the Phase 10 templates as a silent fallback. No new detection, no change to any score. |
 
-Nothing beyond those ten phases is implemented.
+Nothing beyond those eleven phases is implemented.
 
 ---
 
@@ -1562,6 +1563,143 @@ caller that never follows the link still cannot read an unqualified finding.
 
 ---
 
+## LLM narratives (Phase 11 - GroqCloud)
+
+Phase 10's summaries were templates: deterministic, stilted in places, and
+incapable of saying anything the numbers did not. This phase lets a hosted model
+write them, and spends almost all of its code making sure that change cannot
+cost anything.
+
+Full detail in [LLM_EXPLANATION_REPORT.md](LLM_EXPLANATION_REPORT.md).
+
+### It runs without a key, and that is not a degraded mode
+
+With no `LEDGERGUARD_GROQ_API_KEY` set, every narrative comes from the Phase 10
+templates and the response says `"narrativeSource": "TEMPLATE"`. That is how the
+test suite runs and how a fresh checkout behaves. The object graph is identical
+either way — one step declines to run — so the fallback path is the ordinary
+path rather than a second configuration nobody exercises.
+
+### The model may restate the evidence and nothing else
+
+The prompt's load-bearing line is the one that says what job the model has.
+Asked to *explain why this account is anomalous*, a model reasons: it weighs, it
+infers motive, and it reaches for "likely". Asked to *rewrite this record as
+prose, adding nothing*, the same model does something much closer to what is
+wanted, because the second framing leaves no room for a conclusion the record
+does not contain.
+
+The record is built from Phase 10's `AccountExplanation` and nothing else — no
+second pass over the ledger — so a fact in the prose either appears there or was
+invented. Worth stating because it is a property rather than luck: **no
+user-controlled text reaches the model.** No payment descriptions, no
+counterparty names; Phase 8 never collected any. An attacker who controls
+payments controls, at most, some doubles.
+
+### Every name and number is checked before anyone reads it
+
+A prompt is a request; a validator is a guarantee. Five layers, none
+short-circuiting:
+
+| Layer | Rejects |
+|---|---|
+| Structure | empty, too short or long, markdown, `Here is a summary:` |
+| Vocabulary | Phase 10's fifteen wrongdoing/certainty words |
+| Identifiers | a real signal or feature this account's evidence never carried |
+| Identifiers | a token shaped like one of ours that exists nowhere |
+| Numbers | any number that is not a truthful rendering of an evidence value |
+| State | prose contradicting the agreement state it was given |
+
+Numbers are the hard one. Exact matching cannot work — the evidence holds 0.556
+and a good sentence says "0.56", or "56%", or "0.6", all truthful. So a stated
+number is grounded when some evidence value, **rounded to the precision the
+narrative chose**, equals it.
+
+**What it cannot catch:** grounded parts assembled into a misleading whole — the
+right number attributed to the wrong signal. Judging that needs understanding the
+sentence, and anything able to understand it would need validating in turn. That
+residue never reaches zero, which is why the template fallback and the source
+discriminator both exist.
+
+### Failure is logged, never surfaced
+
+Timeout, rate limit, bad key, open breaker, fabricated number — every one of them
+returns the complete Phase 10 narrative and marks the source `TEMPLATE`. No error
+field, no banner. A reviewer looking at a flagged account is doing real work, and
+an interruption about a model provider tells them nothing they can act on.
+
+`NarrativeSource` has two values and deliberately not three: a template served
+after a timeout is the same artefact as one served with no key configured, and
+naming the difference on the wire would make an ordinary degradation look like an
+incident.
+
+Resilience: 1.5 s connect and 4 s read timeouts, two attempts 200 ms apart, and a
+breaker that opens after three consecutive failures for sixty seconds. The
+breaker is what turns a provider outage from "every request is four seconds
+slower" into "three slow requests, then nothing".
+
+### Determinism, honestly
+
+Phases 7–10 promised the same ledger gives the same output. **This phase cannot.**
+Temperature 0 is not determinism: hosted inference varies with batching and
+scheduling, and providers update weights behind a stable model id.
+
+So temperature is zero *and* narratives are cached on
+`SHA-256(model | promptVersion | evidence JSON)`. What that buys is narrower than
+determinism and is most of what determinism protected: the same evidence returns
+the same words. `asOf` and the account id are deliberately out of the key — the
+narrative describes numbers, so identical numbers should not pay twice to differ
+— and because every number the prose could mention is *in* the key, stale prose
+about moved numbers is not representable.
+
+### One endpoint, because calls cost money
+
+The model runs on `GET /detection/accounts/{id}/explanation` and nowhere else.
+The ranking returns many accounts and one call per row would mean fifty calls to
+help someone choose the one account to open. Here a human has already chosen, so
+spend scales with attention rather than page size.
+
+```powershell
+curl.exe -s "http://localhost:8080/detection/accounts/<ACCOUNT_ID>/explanation"
+```
+
+The deterministic version is always one parameter away, for an audit trail or a
+second opinion on prose that reads oddly:
+
+```powershell
+curl.exe -s "http://localhost:8080/detection/accounts/<ACCOUNT_ID>/explanation?narrative=template"
+```
+
+### Model choice is falsifiable
+
+`llama-3.1-8b-instant` by default, in configuration rather than code. The task is
+constrained rewriting, not reasoning — the hard thinking was done by Phases 8–10
+— so the cheapest and fastest model is the right starting point. Whether that was
+right is measured, not asserted: the service reports a **rejection rate**, and
+the validator's reason codes say whether the answer is a better prompt
+(`PREAMBLE`, `MARKUP`) or a bigger model (`UNGROUNDED_NUMBER`).
+
+### Secrets
+
+The key comes from `LEDGERGUARD_GROQ_API_KEY`, the same environment-variable
+pattern the database and Kafka credentials have used since Phase 1. It is sent in
+an `Authorization` header and **never logged** — a test asserts no failure
+message from any status code contains the key or the word `Bearer`, because an
+error message ends up in a log and a key in a log is a leaked key. `.env` is
+gitignored; [.env.example](.env.example) is committed with an empty value.
+
+### The caveat, sharpened
+
+> **Better prose is not better ground truth.** An LLM narrative describes the
+> same unvalidated statistical and ML outputs Phase 10 described. It reads more
+> fluently and knows nothing more. Fluent prose is more persuasive than a
+> template without being more correct, so this upgrade carries a real risk: it
+> makes the output *easier to believe* without making it *more believable*. That
+> asymmetry is why the validator is strict, why the source is on every response,
+> and why the forbidden vocabulary is enforced twice.
+
+---
+
 ## Running it locally
 
 ### Prerequisites
@@ -1672,10 +1810,11 @@ It listens on <http://localhost:8080>.
 mvn test
 ```
 
-379 tests across forty-one classes — 108 example-based, 38 jqwik properties
+468 tests across forty-eight classes — 108 example-based, 38 jqwik properties
 that between them run tens of thousands of generated cases, 22 ChaosLab tests (15
 fault-injection scenarios plus a 7-test harness self-test), 65 statistical
-detection tests, 47 ML detection tests and 99 explanation tests:
+detection tests, 47 ML detection tests, 101 explanation tests and 87 LLM
+narrative tests:
 
 | Class | Tests | Covers |
 |---|---|---|
@@ -1747,7 +1886,21 @@ Phase 10 explanation tests (see [EXPLANATION_REPORT.md](EXPLANATION_REPORT.md)):
 | `FeatureProvenanceTest` | 26 | the feature-to-signal map pinned against the model's own feature order |
 | `ReconciliationTest` | 13 | all four agreement states, corroboration that is not score agreement, dilution, and four narratives that differ |
 | `SummaryWriterTest` | 14 | the forbidden vocabulary, the qualification that always travels, the caveats each account earns |
-| `ExplanationFlowIntegrationTest` | 8 | explanations agreeing with the scores they explain, on a real ledger |
+| `ExplanationFlowIntegrationTest` | 10 | explanations agreeing with the scores they explain, on a real ledger, and the narrative falling back to the template with no API key |
+
+Phase 11 LLM narrative tests (see
+[LLM_EXPLANATION_REPORT.md](LLM_EXPLANATION_REPORT.md)). None of them makes a
+network call:
+
+| Class | Tests | Covers |
+|---|---|---|
+| `NarrativeEvidenceTest` | 10 | the payload is complete and closed, and its JSON is stable enough to key a cache on |
+| `NumericGroundingTest` | 10 | truthful roundings and percentages accepted, wrong values rejected |
+| `NarrativeValidatorTest` | 24 | fabricated and ungrounded identifiers, wrong numbers, banned vocabulary, preamble, markdown, state contradictions |
+| `HttpGroqClientTest` | 10 | request shape, unknown response fields, which statuses are retryable, and that the key never reaches an error message |
+| `GroqGatewayTest` | 10 | the retry budget, the breaker opening, its cooldown and its trial call |
+| `NarrativeCacheTest` | 8 | what belongs in the key, what pointedly does not, and LRU eviction |
+| `NarrativeServiceTest` | 15 | every failure path serving a complete template narrative, and the cache serving repeats |
 
 The integration tests start their own throwaway PostgreSQL via Testcontainers
 and run the real Flyway migrations against it — no in-memory database stand-in,
@@ -1810,7 +1963,7 @@ are KRaft; the difference is only in how the port is negotiated.
 | `GET` | `/reconciliation/incidents` | Filter incidents by `type`, `severity`, `status`, `transactionId`. |
 | `POST` | `/reconciliation/incidents/{id}/resolve` | Mark an incident resolved. |
 | `GET` | `/detection/accounts/{id}` | Anomaly score for one account, with every signal's contribution and a summary. |
-| `GET` | `/detection/accounts/{id}/explanation` | Why it scores that: full signal breakdown, per-feature model attribution, how the two layers relate, caveats. |
+| `GET` | `/detection/accounts/{id}/explanation` | Why it scores that: full signal breakdown, per-feature model attribution, how the two layers relate, caveats, and a narrative marked `TEMPLATE` or `LLM`. `?narrative=template` forces the deterministic one. |
 | `GET` | `/detection/anomalies` | Accounts either layer flags, worst first. Not ranked by a blended score, because there is no blended score. |
 | `POST` | `/detection/model/train` | Train an Isolation Forest on the ledger as it stands. Refused below 32 accounts. |
 | `GET` | `/detection/model` | What model is loaded, if any. |
@@ -2079,16 +2232,20 @@ needs a metric to compare them on.
 Phase 10 explains those scores and validates neither. An explanation makes a
 model's behaviour inspectable; it cannot make an unmeasured detector a measured
 one, and a specific-sounding attribution of an unvalidated score is still an
-unvalidated score.
+unvalidated score. Phase 11 changes only how that explanation is worded, and if
+anything raises the stakes: fluent prose is more persuasive than a template
+without being more correct.
 
 Property-based testing was the Phase 6 deliverable, ChaosLab the Phase 7 one, the
 statistical signal layer the Phase 8 one, the Isolation Forest the Phase 9 one
-and the explanation layer the Phase 10 one; all five now exist - see
+the explanation layer the Phase 10 one and the LLM narratives the Phase 11 one;
+all six now exist - see
 [Verification](#verification-phase-6),
 [Resilience](#resilience-phase-7---chaoslab),
 [Detection](#detection-phase-8---statistical),
-[Machine learning](#machine-learning-phase-9---isolation-forest) and
-[Explanation](#explanation-phase-10).
+[Machine learning](#machine-learning-phase-9---isolation-forest),
+[Explanation](#explanation-phase-10) and
+[LLM narratives](#llm-narratives-phase-11---groqcloud).
 
 Each layer's coverage limits are deliberate and documented rather than implied.
 ChaosLab does not exercise multi-instance network partitions, clock skew between
@@ -2101,6 +2258,9 @@ never been measured against ground truth. The explanation layer's feature
 attribution is faithful to the paths a point took and is not a unique
 decomposition of the score: correlated features take credit from each other, and
 a feature no tree happened to split on earns nothing however telling its value.
+The LLM layer validates that every name and number in a generated narrative is
+grounded, and cannot validate that grounded parts were assembled into a truthful
+whole.
 
 Two pieces of deliberate debt, both documented where they live:
 
