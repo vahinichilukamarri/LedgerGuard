@@ -28,11 +28,14 @@ class SummaryWriterTest {
     /**
      * Words that assert wrongdoing or certainty. An explanation may describe a
      * departure from a reference; it may not characterise the account.
+     *
+     * <p>Taken from {@link ForbiddenVocabulary} rather than restated here.
+     * Phase 11 states the same list inside the LLM prompt and checks it again
+     * after generation, and three copies would drift silently in the worst
+     * direction: a word dropped from the validator but kept here would let
+     * exactly one thing through.
      */
-    private static final List<String> FORBIDDEN = List.of(
-            "fraud", "fraudulent", "criminal", "illegal", "launder", "suspicious",
-            "malicious", "guilty", "confirmed", "proves", "proven", "certainly",
-            "definitely", "undoubtedly", "clearly indicates");
+    private static final List<String> FORBIDDEN = ForbiddenVocabulary.WORDS;
 
     @ParameterizedTest
     @ValueSource(strings = {"amountModifiedZ", "log10SecondsSinceLastPayment", "burstSurprisal"})
