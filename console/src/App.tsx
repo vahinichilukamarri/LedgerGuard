@@ -1,6 +1,7 @@
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import { StandingCaveat } from './components/uncertainty/CaveatList';
 import { AnomaliesPage } from './pages/AnomaliesPage';
+import { AccountPage } from './pages/AccountPage';
 import { ModelPage } from './pages/ModelPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
@@ -38,6 +39,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/anomalies" replace />} />
           <Route path="/anomalies" element={<AnomaliesPage />} />
+          <Route path="/accounts/:accountId" element={<AccountPage />} />
           <Route path="/model" element={<ModelPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
