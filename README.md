@@ -2,14 +2,18 @@
 
 A payment integrity platform, built in locked phases.
 
-**Current phase: Phase 13 — Composite Ceiling Fix.** Phase 12 found that the
-composite could not flag an account on one signal, however extreme, once three
-of the five were measurable. The aggregation is now an unrenormalised weighted
-power mean of degree three, and **any single saturated signal elevates any
-account** — with the exponent derived from the existing weights rather than
-chosen. Re-running Phase 12's benchmark also found two defects in that
-benchmark, so one of its published figures was measuring the fixture rather
-than the detector. See
+**Current phase: Phase 14 — Ops Console.** The first phase with a user
+interface: a **read-only** React/TypeScript console over the Phases 8-12
+endpoints, with no backend change of any kind. Its whole constraint is the
+visual form of the one every prior phase asked numerically — *does the screen
+claim more than the backend does?* So there is no red in the stylesheet and no
+blended score anywhere; the four-way agreement state renders as **eight**
+distinguishable states rather than collapsing to "flagged"; a score cannot be
+printed without the convention it is compared against; population percentiles
+cannot be rendered beside model attribution; and a verdict cannot be displayed
+without its source, stratum and blindness. Labelling stays out of the console
+deliberately — a page that shows the scores would make every verdict anchored.
+See [CONSOLE_REPORT.md](CONSOLE_REPORT.md),
 [COMPOSITE_CEILING_FIX_REPORT.md](COMPOSITE_CEILING_FIX_REPORT.md),
 [VALIDATION_REPORT.md](VALIDATION_REPORT.md),
 [LLM_EXPLANATION_REPORT.md](LLM_EXPLANATION_REPORT.md),
@@ -32,8 +36,9 @@ than the detector. See
 | 11 — LLM-Backed Explanation | `v0.11-explanation-llm` | Narratives written by a Groq-hosted model from a closed evidence payload, validated name-by-name and number-by-number before serving, with the Phase 10 templates as a silent fallback. No new detection, no change to any score. |
 | 12 — Validation | `v0.12-validation` | Labels from an independent dispute feed and a stratified blind review queue, plus a leakage-safe evaluation harness. Measures the detector without tuning it, and found a structural ceiling in the Phase 8 composite. |
 | 13 — Composite Ceiling Fix | `v0.13-ceiling-fix` | The aggregation replaced with an unrenormalised weighted power mean of degree three, closing the ceiling and removing the thin-vs-measured inversion. No weight or threshold tuned, no signal or model changed. |
+| 14 — Ops Console | `v0.14-console` | A read-only React/TypeScript console over the existing endpoints, built so the UI cannot imply more confidence than the backend claims. No backend change, no write path, no blended score. |
 
-Nothing beyond those thirteen phases is implemented.
+Nothing beyond those fourteen phases is implemented.
 
 ---
 
@@ -2206,6 +2211,66 @@ are KRaft; the difference is only in how the port is negotiated.
 
 ---
 
+
+## The ops console (Phase 14)
+
+A read-only React/TypeScript console over the detection endpoints. It is the
+first part of this system a non-technical reviewer can look at, and its whole
+design constraint is that **it must not imply more confidence than the backend
+claims**. See [CONSOLE_REPORT.md](CONSOLE_REPORT.md) for the full argument and
+screenshots of every view.
+
+### Running it
+
+It needs no database. `console/mock/server.mjs` serves the real wire shapes for
+seven accounts covering every state the console renders differently:
+
+```powershell
+cd console
+npm install
+npm run mock
+```
+
+Then, in a second terminal:
+
+```powershell
+cd console
+npm run dev
+```
+
+The console is at <http://localhost:5173>. To run it against the real backend
+instead, start the Spring application on 8080 and skip `npm run mock` — the Vite
+dev server proxies `/detection` and `/validation` there either way, which is why
+no CORS mapping was added to the backend. A trained model is optional: an
+untrained one is a state the console renders deliberately, as an absence of a
+second opinion rather than a second opinion that found nothing.
+
+### Its tests
+
+```powershell
+cd console
+npm test
+```
+
+99 tests. The ones that matter assert properties of what reaches the DOM rather
+than snapshots of how it looks: a score never renders without its convention, a
+percentile never renders outside its labelled context wrapper, a verdict never
+renders without a source and a stratum on the same element, the list view calls
+no explanation endpoint at all, and no control anywhere could write a label.
+
+### What it will not do
+
+- **No blended score** — not a column, not a sort key, not a badge. There is no
+  blended score in the backend, and inventing one at the presentation layer
+  would undo Phase 9's central decision.
+- **No colour-coded risk.** The stylesheet contains no red and no green. Hue
+  says which agreement state a row is in and nothing about how bad it is, and
+  every state is readable with the stylesheet off.
+- **No labelling.** Verdicts go through `POST /validation/labels`. Phase 12's
+  review queue is blind by default because a reviewer who sees a score first is
+  partly judging the detector's opinion; a label submitted from a page that
+  displays scores would necessarily be anchored.
+
 ## API
 
 | Method | Path | Purpose |
@@ -2506,6 +2571,15 @@ ledger. What it does establish is structural -- the composite ceiling -- and
 structural findings need no representative sample. Refitting the weights and
 thresholds against a real labelled population, with a held-out split, is the
 phase this one argues for and deliberately refuses to be.
+
+Phase 14 renders all of it and adds no claim of its own. It is built to keep
+repeating the qualification at every point a reader could stop reading - beside
+each score, on each chip, under each verdict, in a banner nobody can close - but
+a layout is still an argument about what matters, and a reviewer who watches a
+ranking for a week will start to trust its order. That order is the composite
+descending, which is a number nobody has validated. The console is also
+unauthenticated, as open as the API it reads, has had no screen-reader audit,
+and is laid out for a desk rather than a phone.
 
 Property-based testing was the Phase 6 deliverable, ChaosLab the Phase 7 one, the
 statistical signal layer the Phase 8 one, the Isolation Forest the Phase 9 one
