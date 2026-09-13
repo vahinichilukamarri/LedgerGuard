@@ -121,8 +121,9 @@ export function AnomaliesPage() {
 
       {query.isSuccess && visible.length > 0 && (
         <section className="card">
-          <p className="card-note">
-            Showing {pageRows.length} of {visible.length} matching rows
+          <p className="results-meta">
+            Showing <strong>{pageRows.length}</strong> of <strong>{visible.length}</strong> matching
+            rows
             {visible.length !== rows.length ? ` (${rows.length} returned by the API)` : ''}. Paging,
             sorting and the text filter are applied in the browser — the endpoint offers no
             parameters for them.

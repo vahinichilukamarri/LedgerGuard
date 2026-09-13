@@ -46,9 +46,17 @@ export function ScoreReadout({
       ? 'statistical composite'
       : 'isolation score, where roughly 0.50 is the middle of the distribution';
 
+  // The meter is a plain visual read of the number already printed above it —
+  // one neutral fill colour at every magnitude, never scaled toward a "worse"
+  // hue. It shows where 0.62 sits on a 0-to-1 bar; it does not grade it.
+  const fillPercent = Math.max(0, Math.min(1, value)) * 100;
+
   return (
     <span className="score" data-testid={`score-${kind}`}>
       <span className="score-value">{formatScore(value)}</span>
+      <span className="score-meter" aria-hidden="true">
+        <span className="score-meter-fill" style={{ width: `${fillPercent}%` }} />
+      </span>
       <span className="score-against">
         {elevated ? 'at or above' : 'below'} the {formatScore(threshold)} convention (not fitted) ·{' '}
         {scaleNote}

@@ -338,6 +338,72 @@ true.
 
 ---
 
+## 6a. Visual redesign — a second pass on the same constraints
+
+The first pass optimised almost entirely for one property: nothing renders that
+overstates the backend. It got that right and, in doing so, produced a page
+that read as a wall of qualifying text — every value carried its caveat inline,
+every table cell wrapped three lines, and the whole thing looked like a debug
+dump rather than a product a reviewer would want to open twice.
+
+Those are separable problems. "Does this overstate what the backend knows" and
+"can a person tell what they're looking at in five seconds" are different
+questions, and a console can fail the second while acing the first. This pass
+answers the second without touching the answer to the first — no fact, number,
+provenance string, or caveat that reached the DOM before was removed; every
+uncertainty test from §2 still passes unchanged.
+
+**What changed, and why it doesn't weaken anything:**
+
+- **A real design system** — a neutral surface palette, one accent colour
+  (indigo) reserved for links, focus rings and active navigation, a type and
+  spacing scale, and consistent cards with shadow and radius. The accent never
+  appears on a score, a badge, or a table row — it marks *interactive* elements,
+  not *evaluative* ones, so it carries no severity meaning to contradict §4.
+- **A magnitude meter beside every score** — a thin bar showing where 0.78 sits
+  on its 0–1 scale, filled in one neutral colour at every value. It is a visual
+  rendering of the number already printed next to it, not a new claim: the fill
+  colour does not change with magnitude, so it cannot be read as "close to red."
+- **Toggle chips instead of a native `<select multiple>`** for the agreement-
+  state filter. The old control needed a modifier key nobody discovers
+  unprompted and looked like an OS artifact dropped into the page. The new one
+  is a set of checkboxes styled as chips — same `states: DisplayState[]`
+  contract, same eight options, discoverable by looking at it.
+- **Two-line clamping on secondary table text**, with the full string kept as a
+  `title` tooltip. A driver list or an evidence sentence that ran to three
+  wrapped lines per cell was the single biggest contributor to the "wall of
+  text" complaint; the text is unchanged and still in the DOM (so every test
+  asserting on it is untouched) and still reachable in full on hover or on the
+  account detail page — only the table's own visual footprint shrank.
+- **A sticky table of contents on the account page**, linking to the same
+  section ids the deep-link tests already exercise. Nothing is hidden behind a
+  tab — every section still renders in full and in order — the TOC is purely
+  additive, an orientation aid for a page that has six dense sections and, on
+  the first pass, no way to jump between them short of scrolling.
+- **A proper app shell header** — a mark, a wordmark, pill-style navigation —
+  with the standing caveat moved to its own full-width strip underneath rather
+  than sharing a flex row with the nav. Its text is byte-for-byte the sentence
+  it was before; it just has a line of its own to be read on now.
+
+**A real bug this pass found:** the per-signal share rows used a three-column
+CSS Grid (`190px 1fr 92px`) that, on a phone-width card, left the flexible
+column almost no space. A grid item's automatic minimum size is its content's
+min-content size unless overridden, and a full-width explanation sentence
+spanning all three columns doesn't shrink to fit — it overflows the row's own
+box instead, which cascaded into roughly 45px of horizontal page overflow on
+mobile. Below 640px the row now stacks as a simple flex column instead of
+fighting for three fixed tracks in too little space, confirmed by measuring
+`document.documentElement.scrollWidth` against `clientWidth` directly (both a
+real backend field-account view and the ranking table were checked; only the
+share rows were affected). Nothing about this was caught by the test suite —
+jsdom doesn't lay out CSS Grid tracks — which is exactly why it was checked by
+hand in an emulated mobile viewport rather than assumed clean.
+
+All 99 tests pass unchanged after this pass; `tsc --noEmit` and `vite build`
+are clean.
+
+---
+
 ## 7. The views
 
 Screenshots in `docs/console/`, captured headlessly against the mock API in both

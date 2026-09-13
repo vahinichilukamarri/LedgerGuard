@@ -8,6 +8,14 @@ import type { DisplayState } from '../../api/agreement';
  * reviewer who narrows to `ML_ONLY` and sees eight rows should know they are
  * eight rows out of the ranking the server sent, not eight rows out of the
  * ledger.
+ *
+ * <h2>Toggle chips, not a native multiple-select</h2>
+ *
+ * A `<select multiple>` needs a modifier key most people don't know to hold, is
+ * rendered by the OS rather than the page, and looks broken next to everything
+ * around it. A set of checkboxes styled as toggle chips does the identical job —
+ * `states` is still an array of the values checked — legibly, and it is
+ * discoverable without documentation.
  */
 
 export const STATE_FILTERS: Array<{ value: DisplayState; label: string }> = [
@@ -39,10 +47,17 @@ export function FilterBar({
     states?: DisplayState[];
   }) => void;
 }) {
+  function toggleState(value: DisplayState) {
+    const next = states.includes(value)
+      ? states.filter((candidate) => candidate !== value)
+      : [...states, value];
+    onChange({ states: next });
+  }
+
   return (
-    <div className="filters">
-      <label>
-        Minimum statistical composite
+    <div className="toolbar">
+      <label className="field">
+        <span className="field-label">Minimum composite</span>
         <input
           type="number"
           min={0}
@@ -57,55 +72,50 @@ export function FilterBar({
             }
           }}
         />
-        <span id="minscore-note" className="th-note">
+        <span id="minscore-note" className="field-hint">
           sent to the API · 0.50 is the stated convention
         </span>
       </label>
 
-      <label className="checkbox">
+      <label className="field">
+        <span className="field-label">Account search</span>
+        <input
+          type="search"
+          value={search}
+          placeholder="Account id contains…"
+          onChange={(event) => onChange({ search: event.target.value })}
+        />
+        <span className="field-hint">applied in the browser</span>
+      </label>
+
+      <label className="field toolbar-checkbox">
         <input
           type="checkbox"
           checked={includeMlOnly}
           onChange={(event) => onChange({ includeMlOnly: event.target.checked })}
         />
         Include accounts only the model flags
-        <span className="th-note">sent to the API · these are the rows Phase 9 exists to surface</span>
       </label>
 
-      <label>
-        Account id contains
-        <input
-          type="search"
-          value={search}
-          placeholder="substring"
-          onChange={(event) => onChange({ search: event.target.value })}
-        />
-        <span className="th-note">applied in the browser</span>
-      </label>
-
-      <label>
-        How the layers relate
-        <select
-          multiple
-          size={4}
-          value={states}
-          aria-label="Filter by how the layers relate"
-          onChange={(event) =>
-            onChange({
-              states: Array.from(event.target.selectedOptions).map(
-                (option) => option.value as DisplayState,
-              ),
-            })
-          }
-        >
-          {STATE_FILTERS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <span className="th-note">applied in the browser · none selected means all</span>
-      </label>
+      <fieldset className="chip-filter field">
+        <legend>How the layers relate</legend>
+        <div className="chip-group" role="group" aria-label="Filter by how the layers relate">
+          {STATE_FILTERS.map((option) => {
+            const active = states.includes(option.value);
+            return (
+              <label key={option.value} className={`chip${active ? ' chip-active' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={active}
+                  onChange={() => toggleState(option.value)}
+                />
+                {option.label}
+              </label>
+            );
+          })}
+        </div>
+        <span className="field-hint">applied in the browser · none selected means all</span>
+      </fieldset>
     </div>
   );
 }

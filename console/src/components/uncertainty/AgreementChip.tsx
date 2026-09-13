@@ -33,8 +33,12 @@ export function AgreementChip({
   const view = displayAgreement(input);
 
   return (
-    <div className={`agreement agreement-${view.tone}`} data-state={view.state}>
+    <div
+      className={`agreement agreement-${view.tone}${compact ? ' compact' : ''}`}
+      data-state={view.state}
+    >
       <div className="agreement-head">
+        <span className="agreement-dot" aria-hidden="true" />
         <span className="agreement-label">{view.label}</span>
         {view.qualifier && <span className="agreement-qualifier">{view.qualifier}</span>}
         <span className="agreement-base">{view.base ?? 'no model'}</span>

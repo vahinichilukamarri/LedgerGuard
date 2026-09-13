@@ -130,7 +130,14 @@ export function AnomalyTable({
 
               <td>
                 <span className="num">{row.applicableSignals}</span> of 5
-                <span className="th-note">
+                <span
+                  className="th-note"
+                  title={
+                    row.wellEvidenced
+                      ? 'well evidenced'
+                      : 'thinly evidenced — most of the evidence this system can gather was never available'
+                  }
+                >
                   {row.wellEvidenced
                     ? 'well evidenced'
                     : 'thinly evidenced — most of the evidence this system can gather was never available'}
@@ -172,18 +179,21 @@ function Drivers({
   model: string[];
   hasModel: boolean;
 }) {
+  const statisticalText =
+    statistical.length > 0 ? statistical.map(humanise).join(', ') : 'no signal fired';
+  const modelText = !hasModel
+    ? 'no model trained'
+    : model.length > 0
+      ? model.map(humanise).join(', ')
+      : 'nothing isolated it faster than an even split would have';
+
   return (
     <>
-      <span className="th-note">
-        statistical: {statistical.length > 0 ? statistical.map(humanise).join(', ') : 'no signal fired'}
+      <span className="th-note" title={`statistical: ${statisticalText}`}>
+        statistical: {statisticalText}
       </span>
-      <span className="th-note">
-        model:{' '}
-        {!hasModel
-          ? 'no model trained'
-          : model.length > 0
-            ? model.map(humanise).join(', ')
-            : 'nothing isolated it faster than an even split would have'}
+      <span className="th-note" title={`model: ${modelText}`}>
+        model: {modelText}
       </span>
     </>
   );
