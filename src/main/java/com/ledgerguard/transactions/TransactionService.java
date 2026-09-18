@@ -2,8 +2,12 @@ package com.ledgerguard.transactions;
 
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.postings.Posting;
+import com.ledgerguard.postings.PostingRepository;
 import com.ledgerguard.postings.PostingType;
+import com.ledgerguard.transactions.dto.TransactionResponse;
 import jakarta.persistence.EntityManager;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * The single write path into the ledger.
@@ -34,11 +39,14 @@ import java.util.Map;
 public class TransactionService {
 
     private final TransactionRepository transactions;
+    private final PostingRepository postings;
     private final EntityManager entityManager;
     private final Clock clock;
 
-    public TransactionService(TransactionRepository transactions, EntityManager entityManager, Clock clock) {
+    public TransactionService(TransactionRepository transactions, PostingRepository postings,
+                              EntityManager entityManager, Clock clock) {
         this.transactions = transactions;
+        this.postings = postings;
         this.entityManager = entityManager;
         this.clock = clock;
     }
@@ -72,6 +80,23 @@ public class TransactionService {
         entityManager.flush();
 
         return new PostedTransaction(transaction, written);
+    }
+
+    /** Read-side listing for the ledger UI: all transactions, or only those touching one account. */
+    @Transactional(readOnly = true)
+    public Page<Transaction> list(UUID accountId, Pageable pageable) {
+        if (accountId != null) {
+            return transactions.findByAccountId(accountId, pageable);
+        }
+        return transactions.findAll(pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public TransactionResponse get(UUID transactionId) {
+        Transaction transaction = transactions.findById(transactionId)
+                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
+        List<Posting> legs = postings.findByTransactionIdOrderByTypeAscCreatedAtAsc(transactionId);
+        return TransactionResponse.from(transaction, legs);
     }
 
     /**

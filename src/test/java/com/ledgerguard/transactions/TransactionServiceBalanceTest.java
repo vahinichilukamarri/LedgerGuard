@@ -2,6 +2,7 @@ package com.ledgerguard.transactions;
 
 import com.ledgerguard.postings.NewPosting;
 import com.ledgerguard.postings.Posting;
+import com.ledgerguard.postings.PostingRepository;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -37,11 +38,12 @@ class TransactionServiceBalanceTest {
     private static final String EUR = "EUR";
 
     private final TransactionRepository transactionRepository = mock(TransactionRepository.class);
+    private final PostingRepository postingRepository = mock(PostingRepository.class);
     private final EntityManager entityManager = mock(EntityManager.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-01-01T12:00:00Z"), ZoneOffset.UTC);
 
     private final TransactionService service =
-            new TransactionService(transactionRepository, entityManager, clock);
+            new TransactionService(transactionRepository, postingRepository, entityManager, clock);
 
     private final UUID accountA = UUID.randomUUID();
     private final UUID accountB = UUID.randomUUID();

@@ -2,6 +2,8 @@ package com.ledgerguard.accounts;
 
 import com.ledgerguard.accounts.dto.AccountBalanceResponse;
 import com.ledgerguard.postings.PostingRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,6 +32,11 @@ public class AccountService {
     @Transactional(readOnly = true)
     public Account require(UUID accountId) {
         return accounts.findById(accountId).orElseThrow(() -> new AccountNotFoundException(accountId));
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Account> list(Pageable pageable) {
+        return accounts.findAll(pageable);
     }
 
     /**

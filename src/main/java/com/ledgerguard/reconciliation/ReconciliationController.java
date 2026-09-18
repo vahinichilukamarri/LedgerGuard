@@ -1,7 +1,12 @@
 package com.ledgerguard.reconciliation;
 
+import com.ledgerguard.config.PageResponse;
 import com.ledgerguard.reconciliation.dto.IncidentResponse;
 import com.ledgerguard.reconciliation.dto.RunResponse;
+import com.ledgerguard.reconciliation.dto.RunSummaryResponse;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -53,5 +58,12 @@ public class ReconciliationController {
     @PostMapping("/incidents/{id}/resolve")
     public IncidentResponse resolve(@PathVariable UUID id) {
         return IncidentResponse.from(reconciliation.resolve(id));
+    }
+
+    /** Run history for the console: what ran and when, newest first. */
+    @GetMapping("/runs")
+    public PageResponse<RunSummaryResponse> runs(
+            @PageableDefault(size = 20, sort = "startedAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return PageResponse.of(reconciliation.listRuns(pageable).map(RunSummaryResponse::from));
     }
 }

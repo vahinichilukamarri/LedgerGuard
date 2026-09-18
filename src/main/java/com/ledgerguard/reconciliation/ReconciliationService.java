@@ -5,6 +5,8 @@ import com.ledgerguard.settlement.SettlementRecordRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -196,6 +198,11 @@ public class ReconciliationService {
                                                      IncidentStatus status, UUID transactionId) {
         return incidents.findAll(
                 ReconciliationIncidentRepository.matching(type, severity, status, transactionId));
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ReconciliationRun> listRuns(Pageable pageable) {
+        return runs.findAllBy(pageable);
     }
 
     @Transactional

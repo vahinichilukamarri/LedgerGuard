@@ -40,7 +40,7 @@ class BalanceInvariantPropertyTest {
      * No dependencies are touched by {@code requireBalanced}, so nulls are safe
      * here and keep the property free of a Spring context.
      */
-    private final TransactionService service = new TransactionService(null, null, null);
+    private final TransactionService service = new TransactionService(null, null, null, null);
 
     @Property(tries = 1000)
     void acceptedIfAndOnlyIfEveryCurrencyNetsToZero(@ForAll("legs") List<LedgerArbitraries.CurrencyLeg> legs) {

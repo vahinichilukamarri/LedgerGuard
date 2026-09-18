@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { ApiError } from '../api/client';
 
 /**
@@ -46,6 +47,11 @@ export function Failure({
       )}
     </div>
   );
+}
+
+/** No rows, distinct from a failed fetch — the request succeeded and found nothing. */
+export function Empty({ children }: { children: ReactNode }) {
+  return <p className="empty">{children}</p>;
 }
 
 export function describe(error: unknown): string {

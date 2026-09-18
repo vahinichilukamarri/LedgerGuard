@@ -3,7 +3,11 @@ package com.ledgerguard.accounts;
 import com.ledgerguard.accounts.dto.AccountBalanceResponse;
 import com.ledgerguard.accounts.dto.AccountResponse;
 import com.ledgerguard.accounts.dto.CreateAccountRequest;
+import com.ledgerguard.config.PageResponse;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -39,5 +43,12 @@ public class AccountController {
     @GetMapping("/{id}/balance")
     public AccountBalanceResponse balance(@PathVariable UUID id) {
         return accountService.balanceOf(id);
+    }
+
+    /** Offset-based paging, newest first, the same defaults as {@code TransactionController}. */
+    @GetMapping
+    public PageResponse<AccountResponse> list(
+            @PageableDefault(size = 50, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return PageResponse.of(accountService.list(pageable).map(AccountResponse::from));
     }
 }

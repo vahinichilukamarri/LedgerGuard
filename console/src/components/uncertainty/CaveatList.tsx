@@ -31,16 +31,22 @@ export function CaveatList({ caveats }: { caveats: string[] }) {
  * Every backend report since Phase 8 has said the scores are unvalidated
  * judgement. A banner a reviewer can close says it once, to one person, on one
  * day. This one is part of the masthead.
+ *
+ * It no longer opens with "Read-only": the console now writes real payments,
+ * refunds, reversals, reconciliation runs and labels. What stays true on
+ * every screen, including the ones that write, is that a detection score is
+ * still unvalidated judgement, not a finding — so the caveat says that
+ * specifically rather than a blanket claim about the whole console.
  */
 export function StandingCaveat() {
   return (
     <p className="standing-caveat" role="note">
-      <strong>Read-only, and unvalidated.</strong> Nothing here is a finding. The statistical
-      weights are unfitted judgement rather than learned parameters, every threshold on this site is
-      a stated convention rather than a calibrated cut-off, and neither score has been measured
-      against ground truth — so precision and recall are unmeasured rather than approximately known.
-      An elevated score means the detector found the behaviour unusual, which is not a claim about
-      the account.
+      <strong>Detection scores are unvalidated.</strong> Nothing a score produces is a finding. The
+      statistical weights are unfitted judgement rather than learned parameters, every threshold on
+      this site is a stated convention rather than a calibrated cut-off, and neither score has been
+      measured against ground truth — so precision and recall are unmeasured rather than
+      approximately known. An elevated score means the detector found the behaviour unusual, which is
+      not a claim about the account.
     </p>
   );
 }

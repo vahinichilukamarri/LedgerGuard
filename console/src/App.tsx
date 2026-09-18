@@ -1,17 +1,22 @@
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import { StandingCaveat } from './components/uncertainty/CaveatList';
+import { OverviewPage } from './pages/OverviewPage';
+import { LedgerPage } from './pages/LedgerPage';
+import { ReconciliationPage } from './pages/ReconciliationPage';
+import { IncidentDetailPage } from './pages/IncidentDetailPage';
 import { AnomaliesPage } from './pages/AnomaliesPage';
 import { AccountPage } from './pages/AccountPage';
 import { ModelPage } from './pages/ModelPage';
+import { SimulationPage } from './pages/SimulationPage';
+import { ValidationPage } from './pages/ValidationPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 /**
- * Three routes and a standing caveat.
- *
- * The route list is short on purpose. Every screen here answers one of three
- * questions — which accounts did the detector surface, why did it surface this
- * one, and which model produced the second opinion — and a fourth screen would
- * mean the console had started to have opinions of its own.
+ * The console grew from a three-route, read-only detection view into an
+ * operations console with write paths of its own. `/simulation` is
+ * deliberately last and visually distinct in the nav (its own `nav-admin`
+ * styling) — it is the one surface that manipulates a fake processor and
+ * card scheme rather than reading or writing the real ledger.
  *
  * Filter, sort and page state lives in the URL rather than in React state, so a
  * reviewer can send someone the view they are actually looking at. That matters
@@ -40,16 +45,33 @@ export function App() {
           </div>
 
           <nav className="app-nav">
+            <NavLink to="/overview" className={({ isActive }) => (isActive ? 'on' : '')}>
+              Overview
+            </NavLink>
+            <NavLink to="/ledger" className={({ isActive }) => (isActive ? 'on' : '')}>
+              Ledger
+            </NavLink>
+            <NavLink to="/reconciliation" className={({ isActive }) => (isActive ? 'on' : '')}>
+              Reconciliation
+            </NavLink>
             <NavLink to="/anomalies" className={({ isActive }) => (isActive ? 'on' : '')}>
               Ranking
             </NavLink>
             <NavLink to="/model" className={({ isActive }) => (isActive ? 'on' : '')}>
               Model
             </NavLink>
+            <NavLink to="/validation" className={({ isActive }) => (isActive ? 'on' : '')}>
+              Validation
+            </NavLink>
+            <NavLink
+              to="/simulation"
+              className={({ isActive }) => (isActive ? 'on nav-admin' : 'nav-admin')}
+            >
+              Simulation
+            </NavLink>
           </nav>
 
           <span className="header-spacer" />
-          <span className="badge-static">Read-only</span>
         </div>
 
         <StandingCaveat />
@@ -57,10 +79,16 @@ export function App() {
 
       <main>
         <Routes>
-          <Route path="/" element={<Navigate to="/anomalies" replace />} />
+          <Route path="/" element={<Navigate to="/overview" replace />} />
+          <Route path="/overview" element={<OverviewPage />} />
+          <Route path="/ledger" element={<LedgerPage />} />
+          <Route path="/reconciliation" element={<ReconciliationPage />} />
+          <Route path="/reconciliation/incidents/:incidentId" element={<IncidentDetailPage />} />
           <Route path="/anomalies" element={<AnomaliesPage />} />
           <Route path="/accounts/:accountId" element={<AccountPage />} />
           <Route path="/model" element={<ModelPage />} />
+          <Route path="/validation" element={<ValidationPage />} />
+          <Route path="/simulation" element={<SimulationPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>
