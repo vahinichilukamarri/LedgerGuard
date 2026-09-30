@@ -1,7 +1,10 @@
 import { useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useCreateReversal, useTransaction, useTransactions } from '../../api/queries';
 import type { TransactionSummary } from '../../api/types';
 import { instant } from '../../format';
+import { EmptyState } from '../EmptyState';
+import { Icon } from '../icons/Icon';
 import { describe, Failure, Pending } from '../States';
 import { ConfirmDialog } from './ConfirmDialog';
 import { DataTable, type Column } from './DataTable';
@@ -11,16 +14,28 @@ import { StatusPill } from './StatusPill';
 
 const PAGE_SIZE = 10;
 
-export function TransactionsPanel({
-  accountId,
-  onAccountIdChange,
-}: {
-  accountId: string;
-  onAccountIdChange: (accountId: string) => void;
-}) {
+/**
+ * `GET /transactions`, filterable by account. The `accountId` filter lives
+ * in the URL (`?accountId=`) rather than component state, consistent with
+ * the rest of the app — `AccountsPanel`'s "Transactions" link on a row sends
+ * a reviewer straight to this page pre-filtered, and the URL reproduces
+ * that view for anyone it's shared with.
+ */
+export function TransactionsPanel() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const accountId = searchParams.get('accountId') ?? '';
   const [page, setPage] = useState(0);
   const [expanded, setExpanded] = useState<string | null>(null);
   const query = useTransactions(page, PAGE_SIZE, accountId || undefined);
+
+  function onAccountIdChange(next: string) {
+    setPage(0);
+    if (next) {
+      setSearchParams({ accountId: next });
+    } else {
+      setSearchParams({});
+    }
+  }
 
   const columns: Column<TransactionSummary>[] = [
     { key: 'id', header: 'Transaction', render: (t) => <EvidenceLink id={t.id} /> },
@@ -39,24 +54,14 @@ export function TransactionsPanel({
   ];
 
   return (
-    <section className="card">
-      <h2>Transactions</h2>
-      <p className="card-note">
-        <code>GET /transactions</code>, filterable by account, offset-paginated 10 at a time. Every row is an
-        immutable posted transaction — postings are never edited, only reversed by posting a new, negating
-        transaction.
-      </p>
-
+    <div>
       <div className="toolbar">
         <label className="field">
           <span className="field-label">Filter by account id</span>
           <input
             type="search"
             value={accountId}
-            onChange={(event) => {
-              onAccountIdChange(event.target.value);
-              setPage(0);
-            }}
+            onChange={(event) => onAccountIdChange(event.target.value)}
             placeholder="account id, or leave blank for all"
           />
         </label>
@@ -64,27 +69,36 @@ export function TransactionsPanel({
 
       <div style={{ height: 18 }} />
 
-      {query.isPending && <Pending what="transactions" />}
-      {query.isError && <Failure what="transactions" error={query.error} onRetry={() => void query.refetch()} />}
-      {query.data && (
+      {query.isError ? (
+        <Failure what="transactions" error={query.error} onRetry={() => void query.refetch()} />
+      ) : (
         <DataTable
           columns={columns}
-          rows={query.data.content}
+          rows={query.data?.content ?? []}
           rowKey={(t) => t.id}
-          page={query.data.page}
-          totalPages={query.data.totalPages}
-          totalElements={query.data.totalElements}
+          page={query.data?.page}
+          totalPages={query.data?.totalPages}
+          totalElements={query.data?.totalElements}
           onPageChange={setPage}
+          loading={query.isPending}
           emptyMessage={
-            accountId
-              ? 'No transactions touch this account yet.'
-              : 'No transactions yet. Create a payment above.'
+            <EmptyState
+              icon="transactions"
+              title={accountId ? 'No transactions touch this account yet' : 'No transactions yet'}
+              action={
+                <Link className="btn btn-primary" to="/ledger/payments">
+                  <Icon name="plus" /> Create payment
+                </Link>
+              }
+            >
+              Every transaction here comes from a posted payment, a refund, or a reversal.
+            </EmptyState>
           }
         />
       )}
 
       {expanded && <TransactionDetail transactionId={expanded} />}
-    </section>
+    </div>
   );
 }
 

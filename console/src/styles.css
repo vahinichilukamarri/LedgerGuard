@@ -66,19 +66,39 @@
    * `Severity.java`, a computed enum on reconciliation incidents, never by a
    * detection score. Do not reuse these on anything outside SeverityBadge.
    */
-  --sev-low: #5b6472;
-  --sev-low-wash: #eef0f3;
-  --sev-medium: #9a7a1f;
-  --sev-medium-wash: #fbf3e0;
-  --sev-high: #b5541f;
-  --sev-high-wash: #fbe9df;
-  --sev-critical: #b3261e;
-  --sev-critical-wash: #fbe3e1;
+  --severity-low: #5b6472;
+  --severity-low-wash: #eef0f3;
+  --severity-medium: #9a7a1f;
+  --severity-medium-wash: #fbf3e0;
+  --severity-high: #b5541f;
+  --severity-high-wash: #fbe9df;
+  --severity-critical: #b3261e;
+  --severity-critical-wash: #fbe3e1;
 
   /* Admin / simulation zone — visually distinct from both the accent and the severity palette. */
   --admin-wash: #fdeee8;
   --admin-rule: #e3a37e;
   --admin-ink: #9a4a1a;
+
+  /*
+   * Sidebar — deliberately not in the dark-mode media query below. A dark
+   * slate sidebar is a fixed part of the shell's identity, independent of
+   * whether the content area is in light or dark mode, the way most
+   * dashboards with a persistent nav rail work. It gets its own small ramp
+   * rather than reusing --ink/--surface, because those are meant to flip
+   * with the content theme and this must not.
+   */
+  --sidebar-bg: #10131a;
+  --sidebar-bg-2: #161a23;
+  --sidebar-border: #232836;
+  --sidebar-ink: #e8eaf0;
+  --sidebar-ink-soft: #9aa1b3;
+  --sidebar-ink-faint: #5c6478;
+  --sidebar-active-bg: #232a3d;
+  --sidebar-accent: #8b85f0;
+  /* Warning-toned, not alarm-red: the simulation section is walled off, not on fire. */
+  --sidebar-admin-ink: #e3a47c;
+  --sidebar-admin-active-bg: #33241a;
 
   /* Scale */
   --sp-1: 4px;
@@ -139,14 +159,14 @@
     --llm-wash: #1f1a2c;
     --llm-rule: #4d3d78;
 
-    --sev-low: #9aa3b2;
-    --sev-low-wash: #1b1e24;
-    --sev-medium: #d9ab4c;
-    --sev-medium-wash: #2a2312;
-    --sev-high: #e08a52;
-    --sev-high-wash: #2c1c12;
-    --sev-critical: #e5716a;
-    --sev-critical-wash: #2c1513;
+    --severity-low: #9aa3b2;
+    --severity-low-wash: #1b1e24;
+    --severity-medium: #d9ab4c;
+    --severity-medium-wash: #2a2312;
+    --severity-high: #e08a52;
+    --severity-high-wash: #2c1c12;
+    --severity-critical: #e5716a;
+    --severity-critical-wash: #2c1513;
 
     --admin-wash: #2a1c14;
     --admin-rule: #6b4326;
@@ -985,6 +1005,9 @@ dl.facts dd { margin: 0; font-family: var(--mono); color: var(--ink); }
 /* ----------------------------------------------------------------- buttons */
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font: inherit;
   font-size: 13px;
   font-weight: 560;
@@ -994,6 +1017,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); color: var(--ink); }
   background: var(--surface);
   color: var(--ink);
   cursor: pointer;
+  text-decoration: none;
 }
 .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .btn:disabled { opacity: 0.5; cursor: default; }
@@ -1015,11 +1039,11 @@ dl.facts dd { margin: 0; font-family: var(--mono); color: var(--ink); }
 .btn-admin:hover:not(:disabled) { background: color-mix(in srgb, var(--admin-ink) 85%, black); color: #fff; }
 
 .btn-danger {
-  border-color: color-mix(in srgb, var(--sev-critical) 55%, var(--border-strong));
-  color: var(--sev-critical);
+  border-color: color-mix(in srgb, var(--severity-critical) 55%, var(--border-strong));
+  color: var(--severity-critical);
   background: var(--surface);
 }
-.btn-danger:hover:not(:disabled) { background: var(--sev-critical-wash); }
+.btn-danger:hover:not(:disabled) { background: var(--severity-critical-wash); }
 
 /* ------------------------------------------------------------------- forms */
 
@@ -1047,8 +1071,8 @@ dl.facts dd { margin: 0; font-family: var(--mono); color: var(--ink); }
 .form-actions { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
 .form-error {
   font-size: 12.5px;
-  color: var(--sev-critical);
-  background: var(--sev-critical-wash);
+  color: var(--severity-critical);
+  background: var(--severity-critical-wash);
   border-radius: var(--radius-sm);
   padding: 8px 11px;
 }
@@ -1090,10 +1114,10 @@ dl.facts dd { margin: 0; font-family: var(--mono); color: var(--ink); }
   letter-spacing: 0.02em;
   border: 1px solid transparent;
 }
-.severity-low { color: var(--sev-low); background: var(--sev-low-wash); }
-.severity-medium { color: var(--sev-medium); background: var(--sev-medium-wash); }
-.severity-high { color: var(--sev-high); background: var(--sev-high-wash); }
-.severity-critical { color: var(--sev-critical); background: var(--sev-critical-wash); }
+.severity-low { color: var(--severity-low); background: var(--severity-low-wash); }
+.severity-medium { color: var(--severity-medium); background: var(--severity-medium-wash); }
+.severity-high { color: var(--severity-high); background: var(--severity-high-wash); }
+.severity-critical { color: var(--severity-critical); background: var(--severity-critical-wash); }
 
 /* ---------------------------------------------------------------- evidence */
 
@@ -1180,3 +1204,452 @@ dl.facts dd { margin: 0; font-family: var(--mono); color: var(--ink); }
 .app-nav a.nav-admin { color: var(--admin-ink); }
 .app-nav a.nav-admin.on { background: var(--admin-wash); color: var(--admin-ink); }
 .app-nav a.nav-admin:hover { background: var(--admin-wash); }
+
+/* ------------------------------------------------------------- id / amount
+ *
+ * `.num` is the monospace, tabular-figure treatment for every id and amount
+ * in the console (already applied by `MoneyAmount`, `EvidenceLink`'s
+ * `.evidence-id`, and `dl.facts dd`) — recorded here as its own section so it
+ * reads as a deliberate part of the design system rather than an incidental
+ * utility class. Nothing new to add: reuse `.num`, don't invent a second
+ * monospace class that could drift from it.
+ */
+
+/* ------------------------------------------------------------- sidebar shell
+ *
+ * Replaces the Phase 14 top-nav header as the primary way to move between
+ * sections now that there are seven of them instead of three. The sidebar is
+ * always the dark-slate palette above, regardless of the content area's own
+ * light/dark mode — a fixed landmark rather than something that changes
+ * under a reviewer while the rest of the page does.
+ */
+
+.shell-layout {
+  display: flex;
+  min-height: 100vh;
+  align-items: stretch;
+}
+
+.app-sidebar {
+  flex: none;
+  width: 232px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 18px;
+  border-bottom: 1px solid var(--sidebar-border);
+  text-decoration: none;
+}
+.sidebar-brand .brand-mark {
+  background: linear-gradient(155deg, var(--sidebar-accent), #6a63d9);
+}
+.sidebar-brand .brand-name { color: var(--sidebar-ink); }
+.sidebar-brand .brand-sub { color: var(--sidebar-ink-faint); }
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 12px;
+  flex: 1;
+}
+.sidebar-nav-label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sidebar-ink-faint);
+  padding: 14px 10px 6px;
+}
+.sidebar-nav-label:first-child { padding-top: 4px; }
+.sidebar-nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  font-weight: 540;
+  color: var(--sidebar-ink-soft);
+  text-decoration: none;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.sidebar-nav a:hover { background: var(--sidebar-bg-2); color: var(--sidebar-ink); }
+.sidebar-nav a.on {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-ink);
+  font-weight: 650;
+}
+.sidebar-nav a.on::before {
+  content: "";
+  width: 3px;
+  align-self: stretch;
+  margin: -9px 10px -9px -12px;
+  border-radius: 2px 0 0 2px;
+  background: var(--sidebar-accent);
+}
+
+/*
+ * One level of nesting, for Ledger only. The parent (`Ledger`) is a label,
+ * not a link — clicking it would have to go somewhere, and `/ledger`
+ * redirecting to the first child already covers that; a label avoids a
+ * second, slightly-redundant way to reach the same place.
+ */
+.sidebar-nav-sublabel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 4px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--sidebar-ink-soft);
+}
+.sidebar-nav-subgroup { display: flex; flex-direction: column; gap: 1px; }
+.sidebar-nav a.sub {
+  padding: 7px 12px 7px 30px;
+  font-size: 13px;
+}
+.sidebar-nav a.sub.on::before { margin-left: -30px; }
+
+/* The simulation link, walled off within the sidebar itself: its own warm
+ * tone and a divider above it, never the sidebar's ordinary active-blue. */
+.sidebar-nav-divider {
+  margin: 10px 10px 4px;
+  border-top: 1px solid var(--sidebar-border);
+}
+.sidebar-nav a.nav-admin { color: var(--sidebar-admin-ink); }
+.sidebar-nav a.nav-admin:hover { background: var(--sidebar-admin-active-bg); color: var(--sidebar-admin-ink); }
+.sidebar-nav a.nav-admin.on {
+  background: var(--sidebar-admin-active-bg);
+  color: var(--sidebar-admin-ink);
+}
+.sidebar-nav a.nav-admin.on::before { background: var(--sidebar-admin-ink); }
+
+.sidebar-foot {
+  padding: 14px 18px;
+  border-top: 1px solid var(--sidebar-border);
+  font-size: 11px;
+  color: var(--sidebar-ink-faint);
+  line-height: 1.5;
+}
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.content-caveat-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px;
+}
+
+.content-inner {
+  max-width: 1240px;
+  padding: 28px 32px 72px;
+}
+
+@media (max-width: 860px) {
+  .shell-layout { flex-direction: column; }
+  .app-sidebar {
+    position: static;
+    width: auto;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+  .sidebar-brand { border-bottom: none; border-right: 1px solid var(--sidebar-border); flex: none; }
+  .sidebar-nav { flex-direction: row; padding: 8px; overflow-x: auto; }
+  .sidebar-nav-label { display: none; }
+  .sidebar-nav a.on::before { display: none; }
+  .sidebar-nav-divider { margin: 0 4px; border-top: none; border-left: 1px solid var(--sidebar-border); }
+  .sidebar-foot { display: none; }
+  .content-caveat-bar, .content-inner { padding-left: 16px; padding-right: 16px; }
+  .sidebar-nav-sublabel { display: none; }
+  .sidebar-nav-subgroup { display: contents; }
+  .sidebar-nav a.sub { padding-left: 12px; }
+}
+
+/* ----------------------------------------------------------------- KPI card
+ *
+ * The Overview page's unit: one real number, its source, and where to act on
+ * it. `.kpi-card` never takes a severity or category colour of its own — the
+ * one exception is the accent left-rule on the open-incidents-by-severity
+ * card, which borrows the real `--severity-*` tokens because that number
+ * *is* reconciliation severity data, not a UI opinion about it.
+ */
+
+.kpi-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-bottom: 24px;
+}
+
+.kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kpi-label {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.kpi-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 26px;
+  font-weight: 650;
+  color: var(--ink);
+  line-height: 1.15;
+}
+.kpi-value.kpi-value-compact { font-size: 16px; font-family: var(--sans); font-weight: 650; }
+.kpi-context { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+.kpi-card > a { font-size: 12.5px; font-weight: 560; margin-top: 2px; }
+
+.kpi-card.kpi-tone-severity-low { border-left: 3px solid var(--severity-low); }
+.kpi-card.kpi-tone-severity-medium { border-left: 3px solid var(--severity-medium); }
+.kpi-card.kpi-tone-severity-high { border-left: 3px solid var(--severity-high); }
+.kpi-card.kpi-tone-severity-critical { border-left: 3px solid var(--severity-critical); }
+
+.kpi-breakdown { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+.kpi-breakdown-item { font-size: 11px; color: var(--ink-faint); }
+.kpi-breakdown-item strong { color: var(--ink-soft); font-weight: 650; }
+
+/* ------------------------------------------------------------- chart container
+ *
+ * A container plus a plain CSS bar chart — this project has no charting
+ * library, so "chart" here means an honest, purely-CSS bar breakdown, not a
+ * canvas. `.bar-fill` is only ever painted with the existing category hues
+ * (agreement state) or left neutral; it is never given a severity or a new
+ * colour of its own, so a bar chart can never smuggle in a risk gradient.
+ */
+
+.chart-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+}
+.chart-title { font-size: 13px; font-weight: 650; margin: 0 0 4px; }
+.chart-note { font-size: 12px; color: var(--ink-faint); margin: 0 0 16px; }
+
+.bar-chart { display: flex; flex-direction: column; gap: 12px; }
+.bar-row { display: grid; grid-template-columns: 150px 1fr 40px; align-items: center; gap: 12px; font-size: 12.5px; }
+.bar-row-label { color: var(--ink-soft); }
+.bar-track { height: 10px; border-radius: var(--radius-pill); background: var(--wash-neutral); overflow: hidden; }
+.bar-fill { height: 100%; border-radius: var(--radius-pill); }
+.bar-fill.cat-neutral { background: var(--cat-neutral); }
+.bar-fill.cat-statistical { background: var(--cat-statistical); }
+.bar-fill.cat-model { background: var(--cat-model); }
+.bar-fill.cat-both { background: var(--cat-both); }
+.bar-row-count { font-family: var(--mono); text-align: right; color: var(--ink-faint); }
+@media (max-width: 560px) {
+  .bar-row { grid-template-columns: 100px 1fr 34px; gap: 8px; }
+}
+
+/* Severity-toned bar fills — reconciliation data only, same rule as SeverityBadge. */
+.bar-fill.tone-severity-low { background: var(--severity-low); }
+.bar-fill.tone-severity-medium { background: var(--severity-medium); }
+.bar-fill.tone-severity-high { background: var(--severity-high); }
+.bar-fill.tone-severity-critical { background: var(--severity-critical); }
+
+/* ------------------------------------------------------------------- icons
+ *
+ * One small hand-authored SVG set (`components/icons/Icon.tsx`), not a
+ * library. `.icon` just sizes the glyph to its surrounding font-size and
+ * lets `color` carry through as `currentColor` — an icon in a sidebar link,
+ * a KPI card or the admin zone always matches the text colour around it,
+ * so it can never carry a meaning (severity, category) of its own.
+ */
+.icon { width: 1em; height: 1em; flex: none; vertical-align: -0.15em; }
+
+/* ------------------------------------------------------------- page header
+ *
+ * One header shape for every page in scope, replacing the `<h1>` + inline-
+ * styled `<p className="card-note">` pattern that used to be repeated
+ * slightly differently on each page.
+ */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.page-header-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 19px;
+}
+.page-header-text { flex: 1; min-width: 0; }
+.page-header-title { font-size: 21px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+.page-header-description { font-size: 13px; color: var(--ink-soft); line-height: 1.55; margin: 0; max-width: 70ch; }
+.page-header-actions { flex: none; display: flex; gap: 10px; align-items: center; padding-top: 4px; }
+
+/* An admin page header gets the amber treatment instead of the accent one. */
+.page-header.page-header-admin .page-header-icon { background: var(--admin-wash); color: var(--admin-ink); }
+
+@media (max-width: 560px) {
+  .page-header { flex-wrap: wrap; }
+  .page-header-actions { width: 100%; }
+}
+
+/* -------------------------------------------------------- interactive card
+ *
+ * Applied only to cards that are actually clickable (a KPI card that links
+ * somewhere, a landing-page domain card) — static info cards are left alone,
+ * so hover-lift stays a signal for "this does something" rather than
+ * decoration on everything.
+ */
+.card-interactive {
+  position: relative;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.card-interactive:hover {
+  box-shadow: var(--shadow-sm);
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+/* Stretched-link pattern: the whole card is the hit target, not just its link text. */
+.card-interactive .stretched-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+/* ------------------------------------------------------------- empty state
+ *
+ * A genuine zero-data first-run moment: icon, title, one line of context,
+ * an optional call to action. Distinct from `DataTable`'s own bare `.empty`,
+ * which stays in use for "no rows match this filter" — narrowing the filter
+ * is the fix there, not creating something, so no CTA is offered.
+ */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 40px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+.empty-state-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--wash-neutral);
+  color: var(--ink-faint);
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+.empty-state-title { font-size: 13.5px; font-weight: 650; color: var(--ink); margin: 0; }
+.empty-state-body { font-size: 12.5px; color: var(--ink-faint); margin: 0; max-width: 46ch; }
+.empty-state-actions { margin-top: 8px; }
+
+/* --------------------------------------------------------------- skeleton
+ *
+ * Grey/neutral shimmer only — never a category or severity hue, so a
+ * loading row can never be misread as a state signal before data arrives.
+ */
+.skeleton {
+  display: inline-block;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--wash-neutral) 25%, var(--surface-hover) 50%, var(--wash-neutral) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.skeleton-line { display: block; height: 12px; width: 70%; }
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.btn-primary { box-shadow: var(--shadow-xs); transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease; }
+.btn-primary:hover:not(:disabled) { box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+
+/* --------------------------------------------------------------- landing
+ *
+ * `/`. Explanatory and navigational only — no live data, so nothing here
+ * needs a query or can go stale independently of `/overview`.
+ */
+.landing-hero {
+  padding: 40px 8px 36px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 32px;
+}
+.landing-hero-title {
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  margin: 8px 0 14px;
+  max-width: 22ch;
+}
+.landing-hero-sub { font-size: 14.5px; color: var(--ink-soft); line-height: 1.6; max-width: 68ch; margin: 0 0 22px; }
+.landing-hero-actions { display: flex; gap: 12px; }
+.landing-hero-actions .btn { padding: 10px 20px; font-size: 13.5px; }
+
+.landing-section-title { font-size: 13px; font-weight: 650; color: var(--ink-soft); margin: 0 0 14px; }
+
+.landing-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-bottom: 8px;
+}
+.landing-card {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.landing-card-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 17px;
+  margin-bottom: 12px;
+}
+.landing-card h3 { font-size: 14px; margin: 0 0 6px; }
+.landing-card .card-note { margin: 0; }
+.landing-card-admin .landing-card-icon { background: var(--admin-wash); color: var(--admin-ink); }
+.landing-card-admin:hover { border-color: var(--admin-rule); }

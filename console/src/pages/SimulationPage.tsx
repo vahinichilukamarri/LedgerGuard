@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader';
 import { DisputeInjectionForm } from '../components/simulation/DisputeInjectionForm';
 import { DisputesTable } from '../components/simulation/DisputesTable';
 import { FaultInjectionForm } from '../components/simulation/FaultInjectionForm';
@@ -13,7 +14,7 @@ import { SettlementRecordsTable } from '../components/simulation/SettlementRecor
 export function SimulationPage() {
   return (
     <div>
-      <h1>Simulation</h1>
+      <PageHeader icon="simulation" title="Simulation" admin />
       <div className="admin-banner" role="status">
         Admin / chaos surface. Nothing on this page touches the real ledger — it manipulates the simulated
         processor and card scheme so a discrepancy or a chargeback can be produced on demand instead of

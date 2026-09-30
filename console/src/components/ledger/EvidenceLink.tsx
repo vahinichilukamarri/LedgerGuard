@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { shortId } from '../../format';
+import { Icon } from '../icons/Icon';
 
 /**
  * A UUID as evidence: shortened for the row, the full id on hover, and a
@@ -27,7 +28,7 @@ export function EvidenceLink({ id, label }: { id: string; label?: string }) {
         {label ?? shortId(id)}
       </span>
       <button type="button" className="evidence-copy" onClick={() => void copy()} aria-label="Copy full id">
-        {copied ? '✓' : '⧉'}
+        <Icon name={copied ? 'check' : 'copy'} />
       </button>
     </span>
   );

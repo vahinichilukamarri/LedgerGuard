@@ -24,6 +24,7 @@ export function DataTable<T>({
   totalElements,
   onPageChange,
   emptyMessage,
+  loading = false,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -33,7 +34,36 @@ export function DataTable<T>({
   totalElements?: number;
   onPageChange?: (page: number) => void;
   emptyMessage: ReactNode;
+  /** Renders skeleton rows matching the column count instead of the caller pre-empting it with `<Pending>`. Grey/neutral only — never a category or severity hue, so a loading row can never be misread as a state signal. */
+  loading?: boolean;
 }) {
+  if (loading) {
+    return (
+      <div className="table-scroll">
+        <table className="data">
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th key={column.key}>{column.header}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: 4 }).map((_, rowIndex) => (
+              <tr key={rowIndex}>
+                {columns.map((column) => (
+                  <td key={column.key}>
+                    <span className="skeleton skeleton-line" />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
   if (rows.length === 0) {
     return <Empty>{emptyMessage}</Empty>;
   }

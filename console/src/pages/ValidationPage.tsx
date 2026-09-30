@@ -1,3 +1,4 @@
+import { PageHeader } from '../components/PageHeader';
 import { CensusPanel } from '../components/validation/CensusPanel';
 import { ReviewQueuePanel } from '../components/validation/ReviewQueuePanel';
 import { ValidationReportPanel } from '../components/validation/ValidationReportPanel';
@@ -5,12 +6,17 @@ import { ValidationReportPanel } from '../components/validation/ValidationReport
 export function ValidationPage() {
   return (
     <div>
-      <h1>Validation</h1>
-      <p className="card-note" style={{ marginBottom: 20 }}>
-        Where the detector is measured against real judgement — reviewer verdicts and matured disputes — not
-        where the detector's opinion is displayed. See <code>/anomalies</code> and <code>/accounts/:id</code>{' '}
-        for that.
-      </p>
+      <PageHeader
+        icon="validation"
+        title="Validation"
+        description={
+          <>
+            Where the detector is measured against real judgement — reviewer verdicts and matured disputes —
+            not where the detector's opinion is displayed. See <code>/anomalies</code> and{' '}
+            <code>/accounts/:id</code> for that.
+          </>
+        }
+      />
 
       <section className="card">
         <h2>Review queue</h2>
