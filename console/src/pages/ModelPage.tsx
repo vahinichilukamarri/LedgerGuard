@@ -1,4 +1,5 @@
 import { useModel } from '../api/queries';
+import { PageHeader } from '../components/PageHeader';
 import { Failure, Pending } from '../components/States';
 import { instant } from '../components/uncertainty/format';
 
@@ -27,46 +28,59 @@ export function ModelPage() {
   }
 
   const model = query.data;
+  const header = (
+    <PageHeader
+      icon="model"
+      title="Model"
+      description="Which isolation forest produced the second opinion, and on what snapshot."
+    />
+  );
 
   if (!model) {
     return (
-      <section className="card">
-        <h2>No model has been trained</h2>
-        <p className="card-note">
-          Every account in the console will show one layer only. That is an absence of a second
-          opinion, not a second opinion that found nothing — an isolation score of zero would be a
-          claim, and none is being made.
-        </p>
-        <p className="card-note">
-          Training is explicit rather than lazy: a model that appeared as a side effect of the first
-          read would be trained on whatever the ledger held at that moment, and nobody would know
-          which snapshot they got. <code>POST /detection/model/train</code> trains one.
-        </p>
-      </section>
+      <>
+        {header}
+        <section className="card">
+          <h2>No model has been trained</h2>
+          <p className="card-note">
+            Every account in the console will show one layer only. That is an absence of a second
+            opinion, not a second opinion that found nothing — an isolation score of zero would be a
+            claim, and none is being made.
+          </p>
+          <p className="card-note">
+            Training is explicit rather than lazy: a model that appeared as a side effect of the first
+            read would be trained on whatever the ledger held at that moment, and nobody would know
+            which snapshot they got. <code>POST /detection/model/train</code> trains one.
+          </p>
+        </section>
+      </>
     );
   }
 
   return (
-    <section className="card">
-      <h2>Loaded isolation forest</h2>
-      <p className="card-note">
-        The scores this model produces are unvalidated. This page says which model produced them, so
-        a figure can be traced back to a snapshot rather than to "the model".
-      </p>
-      <dl className="facts">
-        <dt>Seed</dt>
-        <dd>{model.seed}</dd>
-        <dt>Trees</dt>
-        <dd>{model.trees}</dd>
-        <dt>Sub-sample size</dt>
-        <dd>{model.subSampleSize}</dd>
-        <dt>Training accounts</dt>
-        <dd>{model.trainingAccounts}</dd>
-        <dt>Trained at</dt>
-        <dd>{instant(model.trainedAt)}</dd>
-        <dt>Ledger as of</dt>
-        <dd>{instant(model.trainedAsOf)}</dd>
-      </dl>
-    </section>
+    <>
+      {header}
+      <section className="card">
+        <h2>Loaded isolation forest</h2>
+        <p className="card-note">
+          The scores this model produces are unvalidated. This page says which model produced them, so
+          a figure can be traced back to a snapshot rather than to "the model".
+        </p>
+        <dl className="facts">
+          <dt>Seed</dt>
+          <dd>{model.seed}</dd>
+          <dt>Trees</dt>
+          <dd>{model.trees}</dd>
+          <dt>Sub-sample size</dt>
+          <dd>{model.subSampleSize}</dd>
+          <dt>Training accounts</dt>
+          <dd>{model.trainingAccounts}</dd>
+          <dt>Trained at</dt>
+          <dd>{instant(model.trainedAt)}</dd>
+          <dt>Ledger as of</dt>
+          <dd>{instant(model.trainedAsOf)}</dd>
+        </dl>
+      </section>
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAnomalies, usePageLabels } from '../api/queries';
+import { PageHeader } from '../components/PageHeader';
 import { Failure, Pending } from '../components/States';
 import { FilterBar } from '../components/anomalies/FilterBar';
 import { AnomalyTable } from '../components/anomalies/AnomalyTable';
@@ -81,6 +82,11 @@ export function AnomaliesPage() {
 
   return (
     <>
+      <PageHeader
+        icon="anomaly"
+        title="Anomaly detection"
+        description="The statistical layer and the isolation-forest layer, ranked side by side and never blended."
+      />
       <section className="card">
         <h2>Accounts either layer considers elevated</h2>
         <p className="card-note">

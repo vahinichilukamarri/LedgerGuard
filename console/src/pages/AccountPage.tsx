@@ -1,5 +1,6 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTemplateExplanation } from '../api/queries';
+import { PageHeader } from '../components/PageHeader';
 import { Failure, Pending } from '../components/States';
 import { AgreementChip } from '../components/uncertainty/AgreementChip';
 import { ScoreReadout } from '../components/uncertainty/ScoreReadout';
@@ -71,6 +72,12 @@ export function AccountPage() {
       <Link className="breadcrumb" to="/anomalies">
         ← Back to ranking
       </Link>
+
+      <PageHeader
+        icon="accounts"
+        title="Detection assessment"
+        description="Both detection layers for one account, with the evidence and caveats behind each."
+      />
 
       <div className="account-layout">
         <aside className="account-toc" aria-label="Sections on this page">

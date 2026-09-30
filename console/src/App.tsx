@@ -81,7 +81,7 @@ const ADMIN_ITEM: NavLeaf = { to: '/simulation', label: 'Simulation', icon: 'sim
  * more here than usual: "the ML_ONLY rows" is the interesting subset, and a link
  * to it should reproduce it.
  */
-export function App() {
+function Shell() {
   return (
     <div className="shell-layout">
       <aside className="app-sidebar">
@@ -142,7 +142,6 @@ export function App() {
 
         <main className="content-inner">
           <Routes>
-            <Route path="/" element={<LandingPage />} />
             <Route path="/overview" element={<OverviewPage />} />
             <Route path="/ledger" element={<Navigate to="/ledger/accounts" replace />} />
             <Route path="/ledger/accounts" element={<LedgerAccountsPage />} />
@@ -161,5 +160,19 @@ export function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+/**
+ * Three layers. `/` is the landing page, deliberately outside the shell so the
+ * first thing anyone sees is the product rather than its navigation; every
+ * other path — the dashboard and each functional page — lives inside `Shell`.
+ */
+export function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<LandingPage />} />
+      <Route path="/*" element={<Shell />} />
+    </Routes>
   );
 }

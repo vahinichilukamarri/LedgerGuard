@@ -2,6 +2,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import { useIncidents, useSettlementRecords, useTransaction } from '../api/queries';
 import type { ReconciliationIncident } from '../api/types';
 import { instant, minorToMajor } from '../format';
+import { PageHeader } from '../components/PageHeader';
 import { Failure, Pending } from '../components/States';
 import { EvidenceLink } from '../components/ledger/EvidenceLink';
 import { MoneyAmount } from '../components/ledger/MoneyAmount';
@@ -50,7 +51,11 @@ export function IncidentDetailPage() {
       <Link className="breadcrumb" to="/reconciliation">
         ← Back to reconciliation
       </Link>
-      <h1>Incident evidence</h1>
+      <PageHeader
+        icon="reconciliation"
+        title="Incident evidence"
+        description="The ledger's side and the processor's side of one discrepancy, shown next to each other."
+      />
 
       <section className="card">
         <div className="account-title-row">

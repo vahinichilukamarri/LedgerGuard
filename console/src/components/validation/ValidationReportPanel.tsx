@@ -56,7 +56,7 @@ export function ValidationReportPanel() {
   return (
     <div>
       {!report.quotable && (
-        <p className="form-error">
+        <p className="notice-caveat">
           Not quotable: the backend does not consider this report's numbers safe to cite as-is.
         </p>
       )}

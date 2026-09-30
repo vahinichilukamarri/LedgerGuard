@@ -185,7 +185,7 @@ export function OverviewPage() {
         </section>
       </div>
 
-      <section className="chart-container" style={{ marginTop: 20, marginBottom: 24 }}>
+      <section className="chart-container chart-container-spaced">
         <h2 className="chart-title">Recent runs — matched vs. examined</h2>
         <p className="chart-note">
           <code>GET /reconciliation/runs</code>, the last {RECENT_RUNS} runs. Bar length is the matched share
@@ -223,10 +223,14 @@ export function OverviewPage() {
 
         <h3>Accounts</h3>
         {accounts.data && accounts.data.content.length > 0 ? (
-          <ul>
+          <ul className="activity-list">
             {accounts.data.content.map((account) => (
               <li key={account.id}>
-                <strong>{account.name}</strong> — <EvidenceLink id={account.id} /> ({account.currency})
+                <strong>{account.name}</strong>
+                <span className="activity-meta">
+                  <EvidenceLink id={account.id} />
+                  <span className="status-pill">{account.currency}</span>
+                </span>
               </li>
             ))}
           </ul>
@@ -244,11 +248,14 @@ export function OverviewPage() {
 
         <h3>Transactions</h3>
         {transactions.data && transactions.data.content.length > 0 ? (
-          <ul>
+          <ul className="activity-list">
             {transactions.data.content.map((transaction) => (
               <li key={transaction.id}>
-                <strong>{transaction.description}</strong> — <EvidenceLink id={transaction.id} /> (
-                {transaction.currency})
+                <strong>{transaction.description}</strong>
+                <span className="activity-meta">
+                  <EvidenceLink id={transaction.id} />
+                  <span className="status-pill">{transaction.currency}</span>
+                </span>
               </li>
             ))}
           </ul>
@@ -264,7 +271,9 @@ export function OverviewPage() {
           />
         )}
 
-        <Link to="/ledger/accounts">Go to ledger →</Link>
+        <Link className="activity-more" to="/ledger/accounts">
+          Go to ledger →
+        </Link>
       </section>
     </div>
   );

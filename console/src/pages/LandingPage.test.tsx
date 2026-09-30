@@ -3,29 +3,21 @@ import { screen } from '@testing-library/react';
 import { LandingPage } from './LandingPage';
 import { renderAt } from '../test/render';
 
-function cardLinkFor(title: string): HTMLElement {
-  const heading = screen.getByRole('heading', { name: title, level: 3 });
-  const link = heading.closest('a');
-  if (!link) {
-    throw new Error(`no enclosing <a> for the "${title}" card`);
-  }
-  return link;
-}
-
 describe('LandingPage', () => {
-  it('links to the dashboard and every domain, with no live data of its own', () => {
+  it('names the product and has exactly one way in: the dashboard', () => {
     renderAt(<LandingPage />, '/', '/');
 
-    expect(screen.getByRole('link', { name: /open dashboard/i })).toHaveAttribute('href', '/overview');
-    expect(cardLinkFor('Ledger')).toHaveAttribute('href', '/ledger/accounts');
-    expect(cardLinkFor('Reconciliation')).toHaveAttribute('href', '/reconciliation');
-    expect(cardLinkFor('Detection')).toHaveAttribute('href', '/anomalies');
-    expect(cardLinkFor('Validation')).toHaveAttribute('href', '/validation');
-    expect(cardLinkFor('Simulation')).toHaveAttribute('href', '/simulation');
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(screen.getAllByText(/LedgerGuard/).length).toBeGreaterThan(0);
+
+    const links = screen.getAllByRole('link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', '/overview');
+    expect(links[0]).toHaveTextContent(/open dashboard/i);
   });
 
-  it('walls the simulation card off with the admin treatment, same as everywhere else', () => {
+  it('carries no live data of its own and does not render the app shell', () => {
     renderAt(<LandingPage />, '/', '/');
-    expect(cardLinkFor('Simulation')).toHaveClass('landing-card-admin');
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
   });
 });
