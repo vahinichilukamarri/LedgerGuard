@@ -4,6 +4,13 @@
 **Write paths added:** none, deliberately · **Tests:** 99 frontend, 433 backend unchanged
 **Stack:** React 18 + TypeScript (strict) + Vite + TanStack Query + Vitest
 
+> **Update.** §§1-10 describe Phase 14 as it shipped: a read-only, three-route
+> console. The console has since grown ledger, reconciliation, simulation and
+> validation pages (which do write, through the real API) and had a full visual
+> redesign. **§11 is the current state**; where a statement below ("three routes",
+> "no write path", "99 tests") no longer holds, §11 says what replaced it. The
+> screenshots in §7 are of the Phase 14 design.
+
 Phases 8 to 13 built a detector that is careful about what it claims. Every
 report since Phase 8 has said the scores are unvalidated judgement rather than
 measurement, the weights are unfitted, and each threshold is a stated convention
@@ -557,6 +564,163 @@ that never combine, eight agreement states that never collapse to "flagged",
 attribution that never blends with population context, and a verdict that cannot
 be displayed without saying who reached it, from which pool, and whether they
 could see the score first.
+
+---
+
+## 11. The console today: three layers, real charts, and a landing page
+
+Everything in §§1-10 was written for a console with three read-only routes. That
+console has since become the ops console for the whole system, and its
+presentation was rebuilt. This section records the current state and what the
+rebuild found. The constraints from §4 were not relaxed; they were kept, and the
+new code is tested against them.
+
+### Three layers
+
+```
+/                          landing        what the system is, one way in      (outside the app shell)
+/overview                  dashboard      live totals and charts              (inside the shell)
+/ledger/accounts           functional     list accounts
+/ledger/accounts/new       functional     create an account
+/ledger/payments           functional     create a payment, then refund it
+/ledger/transactions       functional     list transactions, view postings, reverse one
+/reconciliation            functional     run history, run a reconciliation, triage incidents
+/reconciliation/incidents/:id             both sides of one discrepancy
+/anomalies                 functional     the ranking (unchanged from Phase 14)
+/accounts/:id              functional     one account's assessment (unchanged)
+/model                     functional     which model scored, and train/retrain it
+/validation                functional     blind review queue, census, precision/recall report
+/simulation                admin          inject settlement faults and disputes
+```
+
+The landing page is deliberately **outside** the shell: a first-time visitor meets
+the product before its navigation, and the landing page renders no live data, so it
+cannot show a number that has gone stale. Every other route lives inside the
+sidebar shell, whose standing caveat strip (§10) is unchanged and still cannot be
+closed.
+
+**Write paths now exist**, so "none, deliberately" in the header no longer holds
+for the console as a whole. They go through the real API and are limited to:
+create account, create payment (with an `Idempotency-Key`), refund, reversal, run
+reconciliation, resolve incident, record a validation label, train the model, and
+the two admin injections on `/simulation`. The one the original phase refused is
+still handled the way §5 argued: labels are blind by default and are recorded as
+unanchored unless the reviewer chooses to see the scores first. `/simulation`
+manipulates a simulated processor, is walled off in the sidebar with its own warm
+tone, and asks for confirmation before anything fires.
+
+### The dashboard (`/overview`)
+
+No summary endpoint exists, so the page composes six independent reads
+(`/accounts`, `/transactions`, open incidents, reconciliation runs,
+`/detection/anomalies`, `/detection/model`). Each figure is accurate as of its own
+request and two can be a moment apart; the page says so. Nothing on it is a
+placeholder. Where a chart needs a time series it is built from timestamps the
+records already carry:
+
+| Mark | Source | Note |
+|---|---|---|
+| Stat cards (accounts, transactions, open incidents, latest match rate) | the reads above | count up to the exact value; sparklines are decoration |
+| Ledger activity (area) | `createdAt` of the newest 100 transactions | cumulative, anchored so the last point is the true total even when only one page was fetched |
+| Open incidents by severity (donut) | open incidents | the one place severity colour is used, because the backend computes the severity |
+| Reconciliation runs (columns) | last 8 runs | matched vs discrepancies; indigo and the caveat tone, not red or green |
+| Detection agreement (donut) | `explanation.agreement` per scored account | category hues, never severity |
+| Statistical composite and isolation score (two histograms) | `statisticalScore`, `ml.score` | **two separate charts, on purpose**: one combined distribution would be the blended score §4 forbids |
+
+All charts are hand-written SVG in `components/charts/` (`Donut`, `AreaChart`,
+`ColumnChart`, `Sparkline`, `useTip`). No charting library was added. Each has a
+hover or focus readout and an `aria-label` that states what is plotted; bars are
+capped at 26px and rounded only at the free end, and a legend appears whenever
+there are two or more series.
+
+### Presentation
+
+- **Two stylesheets.** `styles.css` still owns the tokens: neutral surfaces, the
+  single indigo accent, the four category hues, and the severity scale scoped to
+  reconciliation. `polish.css` is loaded after it and changes how those tokens are
+  *used* (type, depth, motion, charts, the landing page). It introduces no colour of
+  its own, so it cannot break the palette rules from there.
+- **Motion** is CSS keyframes plus an `IntersectionObserver`
+  (`components/motion/`: `Reveal`, `CountUp`, `useInView`, `useTheme`). It is
+  decoration only: every animated figure ends on exactly the number the data holds,
+  everything collapses under `prefers-reduced-motion`, and the hooks return the final
+  state immediately under the test runner so no test waits on a tween.
+- **Light and dark** follow the OS by default, with a toggle in the sidebar and the
+  landing nav that stores the choice. The dark token block is declared under both the
+  media query and `[data-theme="dark"]`, with a `:not([data-theme="light"])` guard so
+  an explicit light choice beats an OS-dark setting.
+- **Loading** is a shimmering skeleton (`Pending`) in place of a line of text; the
+  words "Loading ..." are still in the DOM for screen readers and tests.
+- Inter is loaded from Google Fonts by one `<link>` in `index.html`, falling back to
+  the system font stack. Remove that link for zero external requests.
+- No dependency was added; `package.json` is unchanged by the redesign.
+
+### The model page
+
+`/model` now shows the seed, trees, sub-sample size, training accounts, the two
+snapshot timestamps, a meter of the training population against the minimum, and
+the 11 feature names, with a **Train / Retrain** button. Training stays explicit,
+never a side effect of a read. The backend refuses to train below **32 accounts**
+(`insufficient_training_data`), which is why a fresh database shows "no model
+trained" and why the demo data has more than that.
+
+### Findings from rebuilding it against the real backend
+
+1. **The model endpoint's field names differ from the rest of the API.**
+   `GET /detection/model` returns `treeCount` and `trainingSampleSize` (plus
+   `featureNames`); the model summary embedded in every scored response uses `trees`
+   and `trainingAccounts`. The console read the latter everywhere, so the Model page
+   would have rendered blanks against a real backend. The mock server used the
+   embedded names, which is exactly why it was never caught. It is absorbed at the API
+   boundary in `api/client.ts` (`normaliseModel`), so pages see one `ModelInfo`.
+2. **A CSS selector bug hid in the stylesheet.** The table rules were written as comma
+   lists (`table.ranking, table.data th`), so the bare `table.ranking` matched and
+   `table.ranking th/td` did not. The ranking and attribution tables had lost their
+   cell padding and header styling. Fixed with `:is(table.ranking, table.data) ...`.
+3. **Four selects had default browser styling.** The `.toolbar` rule covered only
+   number and search inputs, so the reconciliation incident filters and the validation
+   stratum picker were unstyled. A DOM audit of computed styles across every route now
+   finds none.
+4. **A "not quotable" banner used the red error style.** It is a caveat about a
+   report, not an error and not a severity, so it moved to the caveat tone.
+5. **`useInView` never attached to a chart whose data arrived late.** Charts render a
+   placeholder while loading, so the observed node changes; an object ref stayed
+   pointed at the first, absent node and the chart never animated in. It now returns a
+   callback ref.
+6. **The count-up could flash "-0".** A frame timestamp can precede the captured start
+   time, making the eased value a tiny negative. Both ends are clamped.
+7. **The Vite proxy shares a prefix with SPA routes.** `/reconciliation`,
+   `/validation` and `/accounts` are both pages and API paths, so a direct load of one
+   was forwarded to Spring and 404ed. The proxy entries bypass any request that
+   accepts `text/html`.
+
+### Verifying it
+
+Run against the real stack, with data in it:
+
+```powershell
+docker compose up -d
+mvn spring-boot:run          # http://localhost:8080
+cd console
+npm ci
+npm run dev                  # http://localhost:5173
+```
+
+The mock server (`npm run mock`) is still available for reviewing without a
+database, but it is not what the console was checked against. The seed used for the
+redesign was created entirely through the API: dozens of accounts and payments, a
+refund, a reversal, a dropped settlement record and a reconciliation run that filed
+one open incident, then a trained model.
+
+- **Tests:** 128 frontend (up from 99) pass, with `tsc --noEmit` and `vite build`
+  clean. The uncertainty properties from §4 still pass unchanged. The backend suite
+  was not touched by the redesign.
+- **Layout:** every route was loaded at 1280px and 1440px and measured for horizontal
+  overflow and for form controls left at browser defaults; none were found. Jsdom does
+  not lay out CSS, so this was done in a real browser, which is also how the bugs
+  above were found.
+- **Not verified:** there is no visual-regression suite, and small-screen layouts were
+  checked less thoroughly than desktop. The screenshots in §7 predate the redesign.
 
 ---
 

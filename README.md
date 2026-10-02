@@ -13,7 +13,10 @@ printed without the convention it is compared against; population percentiles
 cannot be rendered beside model attribution; and a verdict cannot be displayed
 without its source, stratum and blindness. Labelling stays out of the console
 deliberately — a page that shows the scores would make every verdict anchored.
-See [CONSOLE_REPORT.md](CONSOLE_REPORT.md),
+The console has since grown into the full ops console for the system: a landing
+page, a live dashboard with charts, and ledger, reconciliation, model, validation
+and admin pages. See [The console today](#the-console-today) below. See
+[CONSOLE_REPORT.md](CONSOLE_REPORT.md),
 [COMPOSITE_CEILING_FIX_REPORT.md](COMPOSITE_CEILING_FIX_REPORT.md),
 [VALIDATION_REPORT.md](VALIDATION_REPORT.md),
 [LLM_EXPLANATION_REPORT.md](LLM_EXPLANATION_REPORT.md),
@@ -36,7 +39,7 @@ See [CONSOLE_REPORT.md](CONSOLE_REPORT.md),
 | 11 — LLM-Backed Explanation | `v0.11-explanation-llm` | Narratives written by a Groq-hosted model from a closed evidence payload, validated name-by-name and number-by-number before serving, with the Phase 10 templates as a silent fallback. No new detection, no change to any score. |
 | 12 — Validation | `v0.12-validation` | Labels from an independent dispute feed and a stratified blind review queue, plus a leakage-safe evaluation harness. Measures the detector without tuning it, and found a structural ceiling in the Phase 8 composite. |
 | 13 — Composite Ceiling Fix | `v0.13-ceiling-fix` | The aggregation replaced with an unrenormalised weighted power mean of degree three, closing the ceiling and removing the thin-vs-measured inversion. No weight or threshold tuned, no signal or model changed. |
-| 14 — Ops Console | `v0.14-console` | A read-only React/TypeScript console over the existing endpoints, built so the UI cannot imply more confidence than the backend claims. No backend change, no write path, no blended score. |
+| 14 — Ops Console | `v0.14-console` | A read-only React/TypeScript console over the existing endpoints, built so the UI cannot imply more confidence than the backend claims. No backend change, no write path, no blended score. *(As shipped; since extended, see [The console today](#the-console-today).)* |
 
 Nothing beyond those fourteen phases is implemented.
 
@@ -2212,7 +2215,68 @@ are KRaft; the difference is only in how the port is negotiated.
 ---
 
 
+## The console today
+
+Phase 14 shipped a read-only console with three routes. It has since become the
+ops console for the whole system, with a landing page, a live dashboard and a page
+for each part of it. [CONSOLE_REPORT.md §11](CONSOLE_REPORT.md) has the full
+account; the short version:
+
+| Route | What it is |
+|---|---|
+| `/` | Landing page. Outside the app shell; no live data. |
+| `/overview` | Dashboard: stat cards and charts, every figure read live. |
+| `/ledger/accounts`, `/ledger/accounts/new`, `/ledger/payments`, `/ledger/transactions` | Create and list accounts, create payments and refund them, list transactions and reverse one. |
+| `/reconciliation`, `/reconciliation/incidents/:id` | Run history, run a reconciliation, triage incidents, see both sides of one. |
+| `/anomalies`, `/accounts/:id` | The ranking and one account's assessment (Phase 14, unchanged). |
+| `/model` | Which model scored, its seed and snapshot, and Train / Retrain. |
+| `/validation` | Blind review queue, review census, precision/recall report. |
+| `/simulation` | Admin only: inject settlement faults and disputes, behind a confirmation. |
+
+- **Charts** are hand-written SVG with hover readouts and no charting library:
+  cumulative transactions, open incidents by severity, reconciliation runs,
+  detection agreement, and the statistical and isolation score distributions as
+  **two separate charts**, because one combined chart would be the blended score the
+  console exists to refuse.
+- **The rules from Phase 14 still hold.** No blended score. Severity colour appears
+  only on reconciliation incidents, where the backend computes a severity. Copy the
+  backend forbids its own narratives is still forbidden in the UI, and the standing
+  caveat strip is still on every page in the shell.
+- **Motion** is CSS plus an `IntersectionObserver`, switched off under
+  `prefers-reduced-motion` and under the test runner. **Light and dark** follow the
+  OS with a stored toggle. **No dependency was added** to `console/package.json`;
+  Inter loads from a single Google Fonts `<link>` in `index.html` and can be removed.
+- **Write paths exist now.** The console creates accounts and payments, refunds,
+  reverses, runs reconciliation, resolves incidents, records blind validation labels
+  and trains the model, all through the real API. Phase 14's "read-only" describes
+  Phase 14.
+
+### Running it against the real stack
+
+```powershell
+docker compose up -d
+mvn spring-boot:run
+cd console
+npm ci
+npm run dev
+```
+
+Open <http://localhost:5173>. The Model page needs a trained model, and the backend
+refuses to train on fewer than **32 accounts**, so a fresh database shows "no model
+trained" until there are enough. The mock server (`npm run mock`) remains for
+reviewing without a database; it is not what the current console was checked
+against.
+
+Frontend checks: `npm run typecheck && npm test && npm run build` in `console/`
+(128 tests).
+
+---
+
 ## The ops console (Phase 14)
+
+*This section describes Phase 14 as it shipped: a read-only console over the
+detection endpoints. For the console as it is now, see
+[The console today](#the-console-today).*
 
 A read-only React/TypeScript console over the detection endpoints. It is the
 first part of this system a non-technical reviewer can look at, and its whole
@@ -2252,7 +2316,7 @@ cd console
 npm test
 ```
 
-99 tests. The ones that matter assert properties of what reaches the DOM rather
+99 tests at Phase 14 (128 now). The ones that matter assert properties of what reaches the DOM rather
 than snapshots of how it looks: a score never renders without its convention, a
 percentile never renders outside its labelled context wrapper, a verdict never
 renders without a source and a stratum on the same element, the list view calls
