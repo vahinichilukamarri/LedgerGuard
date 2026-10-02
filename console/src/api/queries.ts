@@ -24,6 +24,7 @@ import {
   recordLabel,
   resolveIncident,
   runReconciliation,
+  trainModel,
   type CreatePaymentInput,
   type IncidentFilter,
   type InjectDisputeInput,
@@ -146,6 +147,17 @@ export function useModel() {
   return useQuery<ModelInfo | null>({
     queryKey: keys.model(),
     queryFn: fetchModel,
+  });
+}
+
+export function useTrainModel() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: trainModel,
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ['model'] });
+      await client.invalidateQueries({ queryKey: ['anomalies'] });
+    },
   });
 }
 

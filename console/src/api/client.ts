@@ -168,16 +168,44 @@ export function fetchLabels(accountId: string): Promise<AccountLabel[]> {
   return get<AccountLabel[]>(`/validation/labels/${accountId}`);
 }
 
+/**
+ * `GET /detection/model` names two fields differently from the model summary that
+ * travels inside every scored response (`treeCount`/`trainingSampleSize` here,
+ * `trees`/`trainingAccounts` there). The console has one `ModelInfo`, so the
+ * difference is absorbed at this boundary rather than leaking into pages.
+ */
+interface RawModelInfo extends Partial<ModelInfo> {
+  treeCount?: number;
+  trainingSampleSize?: number;
+}
+
+function normaliseModel(raw: RawModelInfo): ModelInfo {
+  return {
+    seed: raw.seed ?? 0,
+    trees: raw.trees ?? raw.treeCount ?? 0,
+    subSampleSize: raw.subSampleSize ?? 0,
+    trainingAccounts: raw.trainingAccounts ?? raw.trainingSampleSize ?? 0,
+    trainedAt: raw.trainedAt ?? '',
+    trainedAsOf: raw.trainedAsOf ?? '',
+    featureNames: raw.featureNames,
+  };
+}
+
 /** The loaded model, or null. A 404 here means "none trained", which is not an error. */
 export async function fetchModel(): Promise<ModelInfo | null> {
   try {
-    return await get<ModelInfo>('/detection/model');
+    return normaliseModel(await get<RawModelInfo>('/detection/model'));
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       return null;
     }
     throw error;
   }
+}
+
+/** `POST /detection/model/train`. Refused by the backend below its minimum training population. */
+export async function trainModel(): Promise<ModelInfo> {
+  return normaliseModel(await send<RawModelInfo>('POST', '/detection/model/train'));
 }
 
 // ------------------------------------------------------------------ accounts

@@ -1,280 +1,446 @@
+import { useMemo, type CSSProperties, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { useAccounts, useAnomalies, useIncidents, useModel, useReconciliationRuns, useTransactions } from '../api/queries';
+import {
+  useAccounts,
+  useAnomalies,
+  useIncidents,
+  useModel,
+  useReconciliationRuns,
+  useTransactions,
+} from '../api/queries';
 import type { Severity } from '../api/types';
 import { instant } from '../format';
+import { AreaChart, type AreaPoint } from '../components/charts/AreaChart';
+import { ColumnChart, type Column } from '../components/charts/ColumnChart';
+import { Donut, type DonutDatum } from '../components/charts/Donut';
+import { Sparkline } from '../components/charts/Sparkline';
 import { EmptyState } from '../components/EmptyState';
-import { Icon } from '../components/icons/Icon';
+import { Icon, type IconName } from '../components/icons/Icon';
+import { CountUp } from '../components/motion/CountUp';
+import { Reveal } from '../components/motion/Reveal';
 import { PageHeader } from '../components/PageHeader';
 import { EvidenceLink } from '../components/ledger/EvidenceLink';
 
 const SEVERITY_ORDER: Severity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
-const AGREEMENT_LABELS: Record<string, string> = {
-  BOTH_ELEVATED: 'Both elevated',
-  STATISTICAL_ONLY: 'Statistical only',
-  ML_ONLY: 'Model only',
-  BOTH_QUIET: 'Both quiet',
-  NO_MODEL: 'No model to compare',
-};
+const AGREEMENT: { key: string; label: string; color: string }[] = [
+  { key: 'BOTH_ELEVATED', label: 'Both elevated', color: 'var(--cat-both)' },
+  { key: 'STATISTICAL_ONLY', label: 'Statistical only', color: 'var(--cat-statistical)' },
+  { key: 'ML_ONLY', label: 'Model only', color: 'var(--cat-model)' },
+  { key: 'BOTH_QUIET', label: 'Both quiet', color: 'var(--cat-neutral)' },
+  { key: 'NO_MODEL', label: 'No model to compare', color: 'var(--border-strong)' },
+];
 
-const AGREEMENT_TONE: Record<string, string> = {
-  BOTH_ELEVATED: 'cat-both',
-  STATISTICAL_ONLY: 'cat-statistical',
-  ML_ONLY: 'cat-model',
-  BOTH_QUIET: 'cat-neutral',
-  NO_MODEL: 'cat-neutral',
-};
+const RECENT_RUNS = 8;
+const SAMPLE = 100;
+const BINS = 10;
 
-const RECENT_RUNS = 5;
+function histogram(values: number[], name: string, color: string): Column[] {
+  const counts = new Array<number>(BINS).fill(0);
+  values.forEach((v) => {
+    const bin = Math.min(BINS - 1, Math.max(0, Math.floor(v * BINS)));
+    counts[bin] = (counts[bin] ?? 0) + 1;
+  });
+  return counts.map((count, i) => ({
+    label: (i / BINS).toFixed(1),
+    title: `${name} ${(i / BINS).toFixed(1)}–${((i + 1) / BINS).toFixed(1)}`,
+    segments: [{ key: name, label: 'accounts', value: count, color }],
+  }));
+}
+
+/** Cumulative count over time, anchored so the last point equals the true total even when only the newest page was fetched. */
+function cumulative(dates: string[], total: number): AreaPoint[] {
+  const times = dates.map((d) => new Date(d).getTime()).sort((a, b) => a - b);
+  return times.map((t, i) => ({ t, y: total - (times.length - 1 - i) }));
+}
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('');
+}
+
+function StatCard({
+  icon,
+  label,
+  value,
+  suffix,
+  decimals,
+  pending,
+  note,
+  trend,
+  to,
+  tone,
+  index,
+}: {
+  icon: IconName;
+  label: string;
+  value: number | null;
+  suffix?: string;
+  decimals?: number;
+  pending: boolean;
+  note?: ReactNode;
+  trend?: number[];
+  to: string;
+  tone?: string;
+  index: number;
+}) {
+  return (
+    <Link
+      to={to}
+      className={`stat-card${tone ? ` ${tone}` : ''}`}
+      style={{ '--i': index } as CSSProperties}
+    >
+      <div className="stat-card-head">
+        <span className="stat-card-icon" aria-hidden="true">
+          <Icon name={icon} />
+        </span>
+        <span className="stat-card-label">{label}</span>
+        <Icon name="arrow-right" className="stat-card-go" />
+      </div>
+      <div className="stat-card-value">
+        {pending || value === null ? '—' : <CountUp value={value} suffix={suffix} decimals={decimals} />}
+      </div>
+      <div className="stat-card-foot">
+        <span className="stat-card-note">{note}</span>
+        {trend && <Sparkline values={trend} />}
+      </div>
+    </Link>
+  );
+}
+
+function ChartCard({
+  title,
+  note,
+  children,
+  className = '',
+  delay = 0,
+}: {
+  title: string;
+  note: ReactNode;
+  children: ReactNode;
+  className?: string;
+  delay?: number;
+}) {
+  return (
+    <Reveal delay={delay} className={`chart-card-wrap ${className}`}>
+      <section className="chart-card">
+        <header>
+          <h2>{title}</h2>
+          <p>{note}</p>
+        </header>
+        {children}
+      </section>
+    </Reveal>
+  );
+}
 
 /**
- * No dashboard/summary endpoint exists on the backend — this page is a
- * client-side composition of five independent, already-existing reads, run in
- * parallel. Each number is accurate as of its own request; they are not a
- * single consistent snapshot, since nothing takes one. Fine for an ops
- * landing page, worth knowing if two of these numbers look momentarily out
- * of step with each other.
- *
- * Every tile here is real: no card renders a number that isn't the direct
- * result of one of the reads below. There is no "trend" computed by the
- * backend anywhere — the run-history bars below are this page reading the
- * last few real runs, not a derived metric.
+ * No dashboard/summary endpoint exists on the backend — this page composes
+ * six independent, already-existing reads, run in parallel, so each figure
+ * is accurate as of its own request and two of them can be a moment apart.
+ * Every number and every mark below is the direct result of one of those
+ * reads; the charts draw only what the API returned. Where a chart needs a
+ * time series (cumulative activity, run history) it is built from the
+ * timestamps the records already carry.
  */
 export function OverviewPage() {
   const openIncidents = useIncidents({ status: 'OPEN' });
   const recentRuns = useReconciliationRuns(0, RECENT_RUNS);
-  const anomalies = useAnomalies(0.5, true);
+  const anomalies = useAnomalies(0, true);
   const model = useModel();
-  const accounts = useAccounts(0, 5);
-  const transactions = useTransactions(0, 5);
+  const accounts = useAccounts(0, SAMPLE);
+  const transactions = useTransactions(0, SAMPLE);
 
-  const severityCounts: Record<Severity, number> = { LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 };
-  openIncidents.data?.forEach((incident) => {
+  const incidents = openIncidents.data ?? [];
+  const severityCounts = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0])) as Record<Severity, number>;
+  incidents.forEach((incident) => {
     severityCounts[incident.severity] += 1;
   });
   const worstSeverity = SEVERITY_ORDER.find((severity) => severityCounts[severity] > 0);
-  const openIncidentsTotal = SEVERITY_ORDER.reduce((sum, severity) => sum + severityCounts[severity], 0);
 
+  const scored = anomalies.data ?? [];
   const agreementCounts: Record<string, number> = {};
-  anomalies.data?.forEach((row) => {
-    const key = row.explanation.agreement ?? 'NO_MODEL';
+  scored.forEach((row) => {
+    const key = row.explanation?.agreement ?? 'NO_MODEL';
     agreementCounts[key] = (agreementCounts[key] ?? 0) + 1;
   });
-  const agreementTotal = anomalies.data?.length ?? 0;
+  const ELEVATED = ['BOTH_ELEVATED', 'STATISTICAL_ONLY', 'ML_ONLY'];
+  const surfaced = scored.filter((row) => ELEVATED.includes(row.explanation?.agreement ?? '')).length;
 
-  const runs = recentRuns.data?.content ?? [];
-  const run = runs[0];
+  const runs = useMemo(() => [...(recentRuns.data?.content ?? [])].reverse(), [recentRuns.data]);
+  const latest = runs[runs.length - 1];
+  const matchRate = latest && latest.internalExamined > 0 ? (latest.matched / latest.internalExamined) * 100 : null;
+
+  const accountTotal = accounts.data?.totalElements ?? 0;
+  const transactionTotal = transactions.data?.totalElements ?? 0;
+  const txSeries = useMemo(
+    () => cumulative((transactions.data?.content ?? []).map((t) => t.createdAt), transactionTotal),
+    [transactions.data, transactionTotal],
+  );
+  const accountSeries = useMemo(
+    () => cumulative((accounts.data?.content ?? []).map((a) => a.createdAt), accountTotal),
+    [accounts.data, accountTotal],
+  );
+
+  const severityData: DonutDatum[] = SEVERITY_ORDER.slice()
+    .reverse()
+    .map((severity) => ({
+      key: severity,
+      label: severity[0] + severity.slice(1).toLowerCase(),
+      value: severityCounts[severity],
+      color: `var(--severity-${severity.toLowerCase()})`,
+    }));
+  const agreementData: DonutDatum[] = AGREEMENT.map((a) => ({ ...a, value: agreementCounts[a.key] ?? 0 }));
+
+  const runColumns: Column[] = runs.map((run) => ({
+    label: new Date(run.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+    title: `Run ${instant(run.startedAt)}`,
+    segments: [
+      { key: 'matched', label: 'Matched', value: run.matched, color: 'var(--accent)' },
+      { key: 'discrepancies', label: 'Discrepancies', value: run.discrepancies, color: 'var(--context-ink)' },
+    ],
+  }));
+
+  const statisticalScores = scored.map((row) => row.statisticalScore).filter((v): v is number => typeof v === 'number');
+  const modelScores = scored.map((row) => row.ml?.score).filter((v): v is number => typeof v === 'number');
 
   return (
-    <div>
+    <div className="overview">
       <PageHeader
         icon="overview"
         title="Overview"
-        description="Real numbers from five independent reads — not a backend aggregate, so two tiles can be a moment apart. Nothing below is a placeholder: every figure is the direct result of the endpoint named on it."
+        description="The ledger, its reconciliation and both detection layers at a glance. Every figure is read live from its own endpoint, so two tiles can be a moment apart."
+        action={
+          <>
+            <Link className="btn btn-secondary" to="/ledger/payments">
+              <Icon name="plus" /> New payment
+            </Link>
+            <Link className="btn btn-primary" to="/reconciliation">
+              <Icon name="refresh" /> Run reconciliation
+            </Link>
+          </>
+        }
       />
 
-      <div className="kpi-grid">
-        <div className={`kpi-card${worstSeverity ? ` kpi-tone-severity-${worstSeverity.toLowerCase()}` : ''}`}>
-          <span className="kpi-label">Open reconciliation incidents</span>
-          <span className="kpi-value">{openIncidents.isPending ? '—' : openIncidentsTotal}</span>
-          {openIncidentsTotal > 0 && (
-            <div className="kpi-breakdown">
-              {SEVERITY_ORDER.filter((severity) => severityCounts[severity] > 0).map((severity) => (
-                <span key={severity} className="kpi-breakdown-item">
-                  <strong>{severityCounts[severity]}</strong> {severity.toLowerCase()}
-                </span>
-              ))}
-            </div>
-          )}
-          <Link to="/reconciliation">Review →</Link>
-        </div>
-
-        <div className="kpi-card">
-          <span className="kpi-label">Latest reconciliation run</span>
-          {recentRuns.isPending ? (
-            <span className="kpi-value">—</span>
-          ) : run ? (
-            <>
-              <span className="kpi-value kpi-value-compact">{instant(run.startedAt)}</span>
-              <span className="kpi-context">
-                {run.matched} matched, {run.discrepancies} discrepanc{run.discrepancies === 1 ? 'y' : 'ies'} of{' '}
-                {run.internalExamined} examined
-              </span>
-            </>
-          ) : (
-            <span className="kpi-value kpi-value-compact">No runs yet</span>
-          )}
-          <Link to="/reconciliation">Run / review →</Link>
-        </div>
-
-        <div className="kpi-card">
-          <span className="kpi-label">Model freshness</span>
-          {model.isPending ? (
-            <span className="kpi-value">—</span>
-          ) : model.data ? (
-            <>
-              <span className="kpi-value kpi-value-compact">{instant(model.data.trainedAt)}</span>
-              <span className="kpi-context">ledger snapshot as of {instant(model.data.trainedAsOf)}</span>
-            </>
-          ) : (
-            <span className="kpi-value kpi-value-compact">No model trained</span>
-          )}
-          <Link to="/model">Detail →</Link>
-        </div>
-
-        <div className="kpi-card">
-          <span className="kpi-label">Accounts the detector surfaced</span>
-          <span className="kpi-value">{anomalies.isPending ? '—' : agreementTotal}</span>
-          <span className="kpi-context">statistical composite ≥ 0.50, or model-only elevated</span>
-          <Link to="/anomalies">Review →</Link>
-        </div>
-      </div>
-
-      <div className="grid-two">
-        <section className="chart-container">
-          <h2 className="chart-title">Open incidents by severity</h2>
-          <p className="chart-note">
-            <code>GET /reconciliation/incidents?status=OPEN</code>. The one chart on this page allowed a real
-            severity colour — reconciliation incidents are the one place that's backend-computed, not a UI
-            opinion.
-          </p>
-          {openIncidentsTotal === 0 ? (
-            <p className="th-note">No open incidents right now.</p>
-          ) : (
-            <div className="bar-chart">
-              {SEVERITY_ORDER.filter((severity) => severityCounts[severity] > 0).map((severity) => (
-                <div className="bar-row" key={severity}>
-                  <span className="bar-row-label">{severity[0]}{severity.slice(1).toLowerCase()}</span>
-                  <div className="bar-track">
-                    <div
-                      className={`bar-fill tone-severity-${severity.toLowerCase()}`}
-                      style={{ width: `${(severityCounts[severity] / openIncidentsTotal) * 100}%` }}
-                    />
-                  </div>
-                  <span className="bar-row-count">{severityCounts[severity]}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="chart-container">
-          <h2 className="chart-title">Detection agreement mix</h2>
-          <p className="chart-note">
-            <code>GET /detection/anomalies</code>, broken down by agreement state. Colour is category, never
-            severity — the same rule the ranking page follows.
-          </p>
-          {agreementTotal === 0 ? (
-            <p className="th-note">Nothing flagged right now.</p>
-          ) : (
-            <div className="bar-chart">
-              {Object.entries(agreementCounts).map(([key, count]) => (
-                <div className="bar-row" key={key}>
-                  <span className="bar-row-label">{AGREEMENT_LABELS[key] ?? key}</span>
-                  <div className="bar-track">
-                    <div
-                      className={`bar-fill ${AGREEMENT_TONE[key] ?? 'cat-neutral'}`}
-                      style={{ width: `${(count / agreementTotal) * 100}%` }}
-                    />
-                  </div>
-                  <span className="bar-row-count">{count}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
-
-      <section className="chart-container chart-container-spaced">
-        <h2 className="chart-title">Recent runs — matched vs. examined</h2>
-        <p className="chart-note">
-          <code>GET /reconciliation/runs</code>, the last {RECENT_RUNS} runs. Bar length is the matched share
-          of what each run examined — not a rate the backend computes, just this page reading several real
-          runs at once instead of one.
-        </p>
-        {runs.length === 0 ? (
-          <p className="th-note">No runs yet.</p>
-        ) : (
-          <div className="bar-chart">
-            {runs.map((historicRun) => {
-              const share = historicRun.internalExamined === 0 ? 0 : historicRun.matched / historicRun.internalExamined;
-              return (
-                <div className="bar-row" key={historicRun.runId}>
-                  <span className="bar-row-label">{instant(historicRun.startedAt)}</span>
-                  <div className="bar-track">
-                    <div className="bar-fill cat-neutral" style={{ width: `${share * 100}%` }} />
-                  </div>
-                  <span className="bar-row-count">
-                    {historicRun.matched}/{historicRun.internalExamined}
+      <div className="stat-grid">
+        <StatCard
+          index={0}
+          icon="accounts"
+          label="Accounts"
+          to="/ledger/accounts"
+          value={accountTotal}
+          pending={accounts.isPending}
+          note="in the ledger"
+          trend={accountSeries.map((p) => p.y)}
+        />
+        <StatCard
+          index={1}
+          icon="transactions"
+          label="Transactions posted"
+          to="/ledger/transactions"
+          value={transactionTotal}
+          pending={transactions.isPending}
+          note="balanced entries"
+          trend={txSeries.map((p) => p.y)}
+        />
+        <StatCard
+          index={2}
+          icon="reconciliation"
+          label="Open reconciliation incidents"
+          to="/reconciliation"
+          value={openIncidents.isPending ? null : incidents.length}
+          pending={openIncidents.isPending}
+          tone={worstSeverity ? `stat-severity-${worstSeverity.toLowerCase()}` : undefined}
+          note={
+            incidents.length > 0 ? (
+              <span className="stat-breakdown">
+                {SEVERITY_ORDER.filter((s) => severityCounts[s] > 0).map((s) => (
+                  <span key={s}>
+                    <strong>{severityCounts[s]}</strong> {s.toLowerCase()}
                   </span>
-                </div>
-              );
-            })}
+                ))}
+              </span>
+            ) : (
+              'nothing open'
+            )
+          }
+        />
+        <StatCard
+          index={3}
+          icon="check"
+          label="Latest run matched"
+          to="/reconciliation"
+          value={matchRate}
+          decimals={0}
+          suffix="%"
+          pending={recentRuns.isPending}
+          note={
+            latest
+              ? `${latest.matched} matched, ${latest.discrepancies} discrepanc${latest.discrepancies === 1 ? 'y' : 'ies'} of ${latest.internalExamined} examined`
+              : 'No runs yet'
+          }
+          trend={runs.map((r) => (r.internalExamined ? (r.matched / r.internalExamined) * 100 : 0))}
+        />
+      </div>
+
+      <div className="chart-row chart-row-wide">
+        <ChartCard
+          title="Ledger activity"
+          note={<>Cumulative transactions posted, from <code>GET /transactions</code>.</>}
+        >
+          <AreaChart points={txSeries} unit="transactions" />
+        </ChartCard>
+        <ChartCard
+          title="Open incidents by severity"
+          note="Reconciliation incidents carry a backend-computed severity, the one place this console colours by it."
+          delay={80}
+        >
+          <Donut data={severityData} centerLabel="open" emptyLabel="No open incidents" />
+        </ChartCard>
+      </div>
+
+      <div className="chart-row">
+        <ChartCard
+          title="Reconciliation runs"
+          note={<>The last {RECENT_RUNS} runs from <code>GET /reconciliation/runs</code>: what matched and what did not.</>}
+        >
+          <ColumnChart columns={runColumns} unit="records examined" />
+        </ChartCard>
+        <ChartCard
+          title="Detection agreement"
+          note="Where the two layers agree and where only one speaks. Colour is category, never severity."
+          delay={80}
+        >
+          <Donut data={agreementData} centerLabel="accounts scored" emptyLabel="Nothing scored yet" />
+        </ChartCard>
+      </div>
+
+      <div className="chart-row">
+        <ChartCard
+          title="Statistical composite, by account"
+          note="Distribution of the statistical layer’s scores. A convention, not a calibrated probability."
+        >
+          <ColumnChart columns={histogram(statisticalScores, 'Statistical', 'var(--cat-statistical)')} unit="accounts" legend={false} />
+        </ChartCard>
+        <ChartCard
+          title="Isolation score, by account"
+          note="Distribution of the model layer’s scores, shown apart from the statistical one on purpose."
+          delay={80}
+        >
+          {modelScores.length > 0 ? (
+            <ColumnChart columns={histogram(modelScores, 'Isolation', 'var(--cat-model)')} unit="accounts" legend={false} />
+          ) : (
+            <EmptyState icon="model" title="No model trained">
+              Without a model there is no second score to plot.{' '}
+              <Link to="/model">Train one on the Model page.</Link>
+            </EmptyState>
+          )}
+        </ChartCard>
+      </div>
+
+      <div className="chart-row chart-row-even">
+        <Reveal className="chart-card-wrap">
+          <section className="chart-card">
+            <header>
+              <h2>Newest accounts</h2>
+              <p>
+                From <code>GET /accounts</code>.
+              </p>
+            </header>
+            {accounts.data && accounts.data.content.length > 0 ? (
+              <ul className="activity-list">
+                {accounts.data.content.slice(0, 6).map((account) => (
+                  <li key={account.id}>
+                    <span className="avatar" aria-hidden="true">
+                      {initials(account.name)}
+                    </span>
+                    <strong>{account.name}</strong>
+                    <span className="activity-meta">
+                      <EvidenceLink id={account.id} />
+                      <span className="status-pill">{account.currency}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                icon="accounts"
+                title="No accounts yet"
+                action={
+                  <Link className="btn btn-primary" to="/ledger/accounts/new">
+                    <Icon name="plus" /> Create account
+                  </Link>
+                }
+              />
+            )}
+            <Link className="activity-more" to="/ledger/accounts">
+              All accounts <Icon name="arrow-right" />
+            </Link>
+          </section>
+        </Reveal>
+
+        <Reveal className="chart-card-wrap" delay={80}>
+          <section className="chart-card">
+            <header>
+              <h2>Latest transactions</h2>
+              <p>
+                From <code>GET /transactions</code>, newest first.
+              </p>
+            </header>
+            {transactions.data && transactions.data.content.length > 0 ? (
+              <ul className="activity-list">
+                {transactions.data.content.slice(0, 6).map((transaction) => (
+                  <li key={transaction.id}>
+                    <span className="avatar avatar-tx" aria-hidden="true">
+                      <Icon name="transactions" />
+                    </span>
+                    <strong>{transaction.description}</strong>
+                    <span className="activity-meta">
+                      <EvidenceLink id={transaction.id} />
+                      <span className="status-pill">{transaction.currency}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                icon="transactions"
+                title="No transactions yet"
+                action={
+                  <Link className="btn btn-primary" to="/ledger/payments">
+                    <Icon name="plus" /> Create payment
+                  </Link>
+                }
+              />
+            )}
+            <Link className="activity-more" to="/ledger/transactions">
+              All transactions <Icon name="arrow-right" />
+            </Link>
+          </section>
+        </Reveal>
+      </div>
+
+      <Reveal>
+        <div className="model-strip">
+          <span className="model-strip-icon" aria-hidden="true">
+            <Icon name="model" />
+          </span>
+          <div>
+            <strong>{model.isPending ? 'Checking the model…' : model.data ? 'Model loaded' : 'No model trained'}</strong>
+            <span>
+              {model.data
+                ? `Trained ${instant(model.data.trainedAt)} on ${model.data.trainingAccounts} accounts. ${surfaced} of ${scored.length} scored accounts were raised by at least one layer.`
+                : 'Every account will show one layer only until a model is trained.'}
+            </span>
           </div>
-        )}
-      </section>
-
-      <section className="card">
-        <h2>Recent activity</h2>
-        <p className="card-note">
-          Newest first, from <code>GET /accounts</code> and <code>GET /transactions</code> — the same lists
-          the ledger pages paginate.
-        </p>
-
-        <h3>Accounts</h3>
-        {accounts.data && accounts.data.content.length > 0 ? (
-          <ul className="activity-list">
-            {accounts.data.content.map((account) => (
-              <li key={account.id}>
-                <strong>{account.name}</strong>
-                <span className="activity-meta">
-                  <EvidenceLink id={account.id} />
-                  <span className="status-pill">{account.currency}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState
-            icon="accounts"
-            title="No accounts yet"
-            action={
-              <Link className="btn btn-primary" to="/ledger/accounts/new">
-                <Icon name="plus" /> Create account
-              </Link>
-            }
-          />
-        )}
-
-        <h3>Transactions</h3>
-        {transactions.data && transactions.data.content.length > 0 ? (
-          <ul className="activity-list">
-            {transactions.data.content.map((transaction) => (
-              <li key={transaction.id}>
-                <strong>{transaction.description}</strong>
-                <span className="activity-meta">
-                  <EvidenceLink id={transaction.id} />
-                  <span className="status-pill">{transaction.currency}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState
-            icon="transactions"
-            title="No transactions yet"
-            action={
-              <Link className="btn btn-primary" to="/ledger/payments">
-                <Icon name="plus" /> Create payment
-              </Link>
-            }
-          />
-        )}
-
-        <Link className="activity-more" to="/ledger/accounts">
-          Go to ledger →
-        </Link>
-      </section>
+          <Link className="btn btn-secondary" to="/model">
+            Model detail <Icon name="arrow-right" />
+          </Link>
+        </div>
+      </Reveal>
     </div>
   );
 }

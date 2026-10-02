@@ -126,7 +126,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0c0d10;
     --surface: #15171c;
     --surface-2: #1a1d23;
@@ -176,6 +176,57 @@
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
     --shadow-md: 0 12px 28px -10px rgba(0, 0, 0, 0.55);
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0c0d10;
+  --surface: #15171c;
+  --surface-2: #1a1d23;
+  --surface-hover: #1e2127;
+  --border: #262930;
+  --border-strong: #34383f;
+
+  --ink: #eceef2;
+  --ink-soft: #aab0bd;
+  --ink-faint: #757c8a;
+
+  --accent: #8b85f0;
+  --accent-strong: #a6a0f7;
+  --accent-soft: #201d3a;
+  --accent-ring: rgba(139, 133, 240, 0.35);
+
+  --cat-neutral: #9aa3b2;
+  --cat-statistical: #4cc7ba;
+  --cat-model: #b48af0;
+  --cat-both: #7fa2f2;
+
+  --wash-neutral: #1b1e24;
+  --wash-statistical: #142523;
+  --wash-model: #201a2c;
+  --wash-both: #182036;
+
+  --context-wash: #241f10;
+  --context-rule: #5c4c1f;
+  --context-ink: #e8c76a;
+  --llm-wash: #1f1a2c;
+  --llm-rule: #4d3d78;
+
+  --severity-low: #9aa3b2;
+  --severity-low-wash: #1b1e24;
+  --severity-medium: #d9ab4c;
+  --severity-medium-wash: #2a2312;
+  --severity-high: #e08a52;
+  --severity-high-wash: #2c1c12;
+  --severity-critical: #e5716a;
+  --severity-critical-wash: #2c1513;
+
+  --admin-wash: #2a1c14;
+  --admin-rule: #6b4326;
+  --admin-ink: #e3a47c;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 12px 28px -10px rgba(0, 0, 0, 0.55);
 }
 
 *,
@@ -1605,74 +1656,6 @@ dl.facts dd { margin: 0; font-family: var(--mono); color: var(--ink); }
 
 .btn-primary { box-shadow: var(--shadow-xs); transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease; }
 .btn-primary:hover:not(:disabled) { box-shadow: var(--shadow-sm); transform: translateY(-1px); }
-
-/* --------------------------------------------------------------- landing
- *
- * `/`. The entry layer, outside the sidebar shell. Explanatory only — no live
- * data — so nothing here can go stale independently of `/overview`. Same
- * tokens as everything else: one accent, neutral surfaces, the ordinary
- * heading scale, just given room.
- */
-.landing {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  padding: 0 40px;
-  background:
-    radial-gradient(60rem 28rem at 50% -8rem, var(--accent-soft), transparent 70%),
-    var(--bg);
-}
-.landing-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 1120px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 28px 0;
-}
-.landing-hero {
-  flex: 1;
-  max-width: 1120px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 8vh 0 10vh;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-}
-.landing-hero .section-eyebrow { color: var(--accent); margin-bottom: 14px; }
-.landing-hero-title {
-  font-size: 44px;
-  font-weight: 750;
-  letter-spacing: -0.02em;
-  line-height: 1.12;
-  margin: 0 0 22px;
-  max-width: 20ch;
-}
-.landing-hero-sub {
-  font-size: 16px;
-  color: var(--ink-soft);
-  line-height: 1.65;
-  max-width: 62ch;
-  margin: 0 0 14px;
-}
-.landing-hero-actions { display: flex; gap: 12px; margin-top: 18px; }
-.landing-hero-actions .btn { padding: 12px 24px; font-size: 14.5px; }
-.landing-foot {
-  max-width: 1120px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 20px 0 28px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--ink-faint);
-}
-
-@media (max-width: 640px) {
-  .landing { padding: 0 20px; }
-  .landing-hero-title { font-size: 32px; }
-}
 
 /* -------------------------------------------------------- overview extras */
 

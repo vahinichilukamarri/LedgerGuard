@@ -11,9 +11,12 @@ import { ApiError } from '../api/client';
  */
 export function Pending({ what }: { what: string }) {
   return (
-    <p className="pending" role="status" aria-live="polite">
-      Loading {what}…
-    </p>
+    <div className="pending" role="status" aria-live="polite">
+      <span className="skeleton skeleton-line skeleton-w60" aria-hidden="true" />
+      <span className="skeleton skeleton-line skeleton-w90" aria-hidden="true" />
+      <span className="skeleton skeleton-line skeleton-w40" aria-hidden="true" />
+      <span className="pending-text">Loading {what}…</span>
+    </div>
   );
 }
 

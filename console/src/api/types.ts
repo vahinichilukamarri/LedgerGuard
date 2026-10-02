@@ -34,6 +34,8 @@ export interface ModelInfo {
   trainingAccounts: number;
   trainedAt: string;
   trainedAsOf: string;
+  /** Only `GET /detection/model` carries these; scored responses embed a narrower view. */
+  featureNames?: string[];
 }
 
 /**

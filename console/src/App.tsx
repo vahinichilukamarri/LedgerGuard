@@ -1,4 +1,5 @@
-import { Link, NavLink, Navigate, Route, Routes } from 'react-router-dom';
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { ThemeToggle } from './components/ThemeToggle';
 import { StandingCaveat } from './components/uncertainty/CaveatList';
 import { Icon, type IconName } from './components/icons/Icon';
 import { LandingPage } from './pages/LandingPage';
@@ -82,6 +83,7 @@ const ADMIN_ITEM: NavLeaf = { to: '/simulation', label: 'Simulation', icon: 'sim
  * to it should reproduce it.
  */
 function Shell() {
+  const { pathname } = useLocation();
   return (
     <div className="shell-layout">
       <aside className="app-sidebar">
@@ -132,7 +134,10 @@ function Shell() {
           </NavLink>
         </nav>
 
-        <div className="sidebar-foot">Same-origin console, read from the real backend.</div>
+        <div className="sidebar-foot">
+          <span>Live from the backend.</span>
+          <ThemeToggle />
+        </div>
       </aside>
 
       <div className="app-content">
@@ -141,22 +146,24 @@ function Shell() {
         </div>
 
         <main className="content-inner">
-          <Routes>
-            <Route path="/overview" element={<OverviewPage />} />
-            <Route path="/ledger" element={<Navigate to="/ledger/accounts" replace />} />
-            <Route path="/ledger/accounts" element={<LedgerAccountsPage />} />
-            <Route path="/ledger/accounts/new" element={<LedgerCreateAccountPage />} />
-            <Route path="/ledger/payments" element={<LedgerPaymentsPage />} />
-            <Route path="/ledger/transactions" element={<LedgerTransactionsPage />} />
-            <Route path="/reconciliation" element={<ReconciliationPage />} />
-            <Route path="/reconciliation/incidents/:incidentId" element={<IncidentDetailPage />} />
-            <Route path="/anomalies" element={<AnomaliesPage />} />
-            <Route path="/accounts/:accountId" element={<AccountPage />} />
-            <Route path="/model" element={<ModelPage />} />
-            <Route path="/validation" element={<ValidationPage />} />
-            <Route path="/simulation" element={<SimulationPage />} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
+          <div key={pathname} className="page-enter">
+            <Routes>
+              <Route path="/overview" element={<OverviewPage />} />
+              <Route path="/ledger" element={<Navigate to="/ledger/accounts" replace />} />
+              <Route path="/ledger/accounts" element={<LedgerAccountsPage />} />
+              <Route path="/ledger/accounts/new" element={<LedgerCreateAccountPage />} />
+              <Route path="/ledger/payments" element={<LedgerPaymentsPage />} />
+              <Route path="/ledger/transactions" element={<LedgerTransactionsPage />} />
+              <Route path="/reconciliation" element={<ReconciliationPage />} />
+              <Route path="/reconciliation/incidents/:incidentId" element={<IncidentDetailPage />} />
+              <Route path="/anomalies" element={<AnomaliesPage />} />
+              <Route path="/accounts/:accountId" element={<AccountPage />} />
+              <Route path="/model" element={<ModelPage />} />
+              <Route path="/validation" element={<ValidationPage />} />
+              <Route path="/simulation" element={<SimulationPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </div>
         </main>
       </div>
     </div>

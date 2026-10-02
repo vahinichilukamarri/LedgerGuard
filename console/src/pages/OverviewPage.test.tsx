@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { OverviewPage } from './OverviewPage';
 import { renderAt } from '../test/render';
 import { HttpResponse, http, server } from '../test/server';
@@ -78,25 +78,33 @@ function renderOverview() {
 }
 
 describe('OverviewPage', () => {
-  it('composes five independent reads into a landing page, and says so', async () => {
+  it('composes independent reads into one dashboard, and says so', async () => {
     renderOverview();
 
     expect(await screen.findByText('Payer')).toBeInTheDocument();
     expect(screen.getByText('invoice 42')).toBeInTheDocument();
-    expect(screen.getByText('No model trained')).toBeInTheDocument();
-    expect(screen.getByText(/not a backend aggregate/i)).toBeInTheDocument();
+    expect(screen.getByText(/read live from its own endpoint/i)).toBeInTheDocument();
   });
 
-  it('breaks open incidents down by real severity, not a placeholder count, and colours the card by it', async () => {
+  it('shows real totals in the stat cards, not placeholders', async () => {
     renderOverview();
-    // The label renders on the first paint, before the incidents query
-    // resolves — waiting on it would pass before the severity class is
-    // even applied. Wait on the breakdown pill instead, which only exists
-    // once the real data has loaded.
-    await screen.findByText('high');
-    const card = screen.getByText('Open reconciliation incidents').closest('.kpi-card')!;
-    expect(card).toHaveClass('kpi-tone-severity-high');
-    expect(card.querySelector('.kpi-value')).toHaveTextContent('1');
+
+    const accounts = (await screen.findByText('Accounts', { selector: '.stat-card-label' })).closest('.stat-card')!;
+    const transactions = screen.getByText('Transactions posted').closest('.stat-card')!;
+    await waitFor(() => {
+      expect(accounts.querySelector('.stat-card-value')).toHaveTextContent('1');
+      expect(transactions.querySelector('.stat-card-value')).toHaveTextContent('1');
+    });
+  });
+
+  it('breaks open incidents down by real severity and tones the card by the worst one', async () => {
+    renderOverview();
+    // The label renders on the first paint, before the incidents query resolves —
+    // wait on the breakdown, which only exists once the real data has loaded.
+    await screen.findByText('high', { selector: '.stat-breakdown span' });
+    const card = screen.getByText('Open reconciliation incidents').closest('.stat-card')!;
+    expect(card).toHaveClass('stat-severity-high');
+    expect(card.querySelector('.stat-card-value')).toHaveTextContent('1');
   });
 
   it('shows the latest reconciliation run with its real counts', async () => {
@@ -104,25 +112,36 @@ describe('OverviewPage', () => {
     expect(await screen.findByText(/3 matched, 1 discrepancy of 4 examined/)).toBeInTheDocument();
   });
 
-  it('renders the detection agreement mix as a bar chart with real counts, colour-coded by category not severity', async () => {
+  it('draws the detection agreement mix from real counts, labelled by category rather than severity', async () => {
     renderOverview();
-    expect(await screen.findByText('Model only')).toBeInTheDocument();
-    expect(screen.getByText('Both elevated')).toBeInTheDocument();
-    // two ML_ONLY rows, one BOTH_ELEVATED — the bar counts must reflect that, not a placeholder.
-    const modelOnlyRow = screen.getByText('Model only').closest('.bar-row');
-    expect(modelOnlyRow).toHaveTextContent('2');
+    const chart = (await screen.findByText('Detection agreement')).closest('.chart-card') as HTMLElement;
+
+    // two ML_ONLY rows, one BOTH_ELEVATED — the counts must reflect that, not a placeholder.
+    const modelOnly = await within(chart).findByText('Model only');
+    expect(modelOnly.closest('.legend-row')).toHaveTextContent('2');
+    expect(within(chart).getByText('Both elevated').closest('.legend-row')).toHaveTextContent('1');
   });
 
-  it('renders the open-incidents-by-severity chart with the real severity tone, and the run-history chart with real matched/examined counts', async () => {
+  it('draws open incidents by severity with the real severity colour', async () => {
     renderOverview();
+    const chart = (await screen.findByText('Open incidents by severity')).closest('.chart-card') as HTMLElement;
 
-    const severityRow = (await screen.findByText('High')).closest('.bar-row')!;
-    expect(severityRow.querySelector('.bar-fill')).toHaveClass('tone-severity-high');
-    expect(severityRow).toHaveTextContent('1');
+    const high = await within(chart).findByText('High');
+    expect(high.closest('.legend-row')).toHaveTextContent('1');
+    expect(within(chart).getByText('High').closest('.legend-row')!.querySelector('.legend-swatch')).toHaveStyle({
+      background: 'var(--severity-high)',
+    });
+  });
 
-    const runsChart = (await screen.findByText('Recent runs — matched vs. examined')).closest(
-      '.chart-container',
-    ) as HTMLElement;
-    expect(within(runsChart).getByText('3/4')).toBeInTheDocument();
+  it('plots the run history from the runs endpoint', async () => {
+    renderOverview();
+    const chart = (await screen.findByText('Reconciliation runs')).closest('.chart-card') as HTMLElement;
+    expect(await within(chart).findByRole('img')).toHaveAttribute('aria-label', expect.stringContaining('1 columns'));
+    expect(within(chart).getByLabelText(/Matched 3, Discrepancies 1/)).toBeInTheDocument();
+  });
+
+  it('says plainly when there is no model to plot a second score from', async () => {
+    renderOverview();
+    expect(await screen.findByText('No model trained', { selector: '.empty-state-title' })).toBeInTheDocument();
   });
 });

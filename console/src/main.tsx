@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App } from './App';
 import './styles.css';
+import './polish.css';
 
 /**
  * One query client, configured to trust the server's caching rather than

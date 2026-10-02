@@ -24,7 +24,17 @@ export type IconName =
   | 'arrow-right'
   | 'copy'
   | 'check'
-  | 'empty';
+  | 'empty'
+  | 'sun'
+  | 'moon'
+  | 'shield'
+  | 'layers'
+  | 'activity'
+  | 'bolt'
+  | 'lock'
+  | 'refresh'
+  | 'eye'
+  | 'github';
 
 const PATHS: Record<IconName, string> = {
   home: 'M4 11.5 12 4l8 7.5M6 10v9h5v-5h2v5h5v-9',
@@ -44,6 +54,16 @@ const PATHS: Record<IconName, string> = {
   copy: 'M9 9h10v10H9zM5 15V5h10v2',
   check: 'M4 12l5 5L20 6',
   empty: 'M4 8l8-4 8 4-8 4-8-4ZM4 8v9l8 4M20 8v9l-8 4M4 8l8 4',
+  sun: 'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+  moon: 'M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z',
+  shield: 'M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6l8-3ZM9 12l2 2 4-4',
+  layers: 'M12 3 3 8l9 5 9-5-9-5ZM3 13l9 5 9-5M3 17.5l9 5 9-5',
+  activity: 'M3 12h4l3-8 4 16 3-8h4',
+  bolt: 'M13 2 4 14h7l-1 8 9-12h-7l1-8Z',
+  lock: 'M6 11h12v9H6zM8 11V8a4 4 0 0 1 8 0v3',
+  refresh: 'M20 11a8 8 0 0 0-14.5-4M4 4v4h4M4 13a8 8 0 0 0 14.5 4M20 20v-4h-4',
+  eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12ZM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
+  github: 'M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21',
 };
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {
